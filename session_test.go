@@ -1,7 +1,6 @@
 package netconf
 
 import (
-	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -14,7 +13,8 @@ import (
 	"time"
 
 	"github.com/carlmjohnson/be"
-	"nemith.io/netconf/testutil"
+
+	"github.com/lasseh/netconf/internal/netconftest"
 )
 
 const (
@@ -47,19 +47,14 @@ const (
 </hello>`
 )
 
-// echoHandler responds to hello and RPCs with appropriate replies
-func echoHandler(req string) []string {
-	// Check if it's a hello message (no message-id)
-	if strings.Contains(req, "<hello") {
-		return []string{helloGood}
-	}
-	// Otherwise it's an RPC - extract message-id and reply
-	msgID := testutil.ExtractMessageID(req)
+// echoHandler says hello and answers every RPC with <ok/>.
+var echoHandler = netconftest.Hello(helloGood, func(req string) []string {
+	msgID := netconftest.ExtractMessageID(req)
 	if msgID != "" {
-		return []string{testutil.OKReply(msgID)}
+		return []string{netconftest.OKReply(msgID)}
 	}
 	return nil
-}
+})
 
 func TestHello(t *testing.T) {
 	tt := []struct {
@@ -76,133 +71,115 @@ func TestHello(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			tr := testutil.NewTransport(func(req string) []string {
+			tr := netconftest.NewTransport(t, func(string) []string {
 				return []string{tc.serverHello}
 			})
-			sess := &Session{tr: tr}
-
-			err := sess.handshake(context.Background())
-			if !tc.shouldError {
-				be.NilErr(t, err)
-			}
-
+			sess, err := Open(context.Background(), tr)
 			be.Equal(t, 1, len(tr.Outputs()))
-			be.Equal(t, tc.wantID, sess.sessionID)
+			if tc.shouldError {
+				be.Nonzero(t, err)
+				be.True(t, tr.Closed())
+				return
+			}
+			be.NilErr(t, err)
+			be.Equal(t, tc.wantID, sess.SessionID())
 		})
 	}
 }
 
 func TestWithCapability(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	customCaps := []string{"urn:custom:cap:1.0", "urn:custom:cap:2.0"}
-	session, err := NewSession(tt, WithCapability(customCaps...))
+	customCaps := []string{CapNetConf11, "urn:custom:cap:1.0", "urn:custom:cap:2.0"}
+	session, err := Open(context.Background(), tt, WithCapability(customCaps...))
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
-	// Verify custom capabilities were set
+	// Verify custom capabilities replaced the defaults
 	be.True(t, session.ClientCaps().Has("urn:custom:cap:1.0"))
 	be.True(t, session.ClientCaps().Has("urn:custom:cap:2.0"))
 	be.False(t, session.ClientCaps().Has(CapNetConf10))
 }
 
+func TestWithCapabilityNoBase(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	// Replacing capabilities without a base capability must fail fast.
+	_, err := Open(context.Background(), tt, WithCapability("urn:custom:cap:1.0"))
+	be.Nonzero(t, err)
+}
+
 func TestWithLogger(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	// Create a custom logger that writes to a buffer
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-
-	session, err := NewSession(tt, WithLogger(logger))
+	logs := &logRecorder{}
+	_, err := Open(context.Background(), tt, WithLogger(slog.New(logs)))
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-	be.Equal(t, logger, session.logger)
+
+	// something the session warns about goes to the given logger
+	tt.Push(`<unknown-message xmlns="urn:example"/>`)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(logs.Records()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	be.Equal(t, "skipping unknown message", strings.Join(logs.Records(), "; "))
 }
 
 func TestWithLoggerNil(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	// Nil logger should become DiscardHandler
-	session, err := NewSession(tt, WithLogger(nil))
+	// A nil logger discards; the session must still work.
+	session, err := Open(context.Background(), tt, WithLogger(nil))
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-	be.Nonzero(t, session.logger)
+	tt.Push(`<unknown-message xmlns="urn:example"/>`)
+	be.NilErr(t, session.Exec(context.Background(), "<get/>", nil))
 }
 
-func TestWithNotifHandlerInterface(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	// Test with interface-based handler
-	handler := &testNotifHandler{}
-	session, err := NewSession(tt, WithNotifHandler(handler))
-	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-	be.Nonzero(t, session.notifHandler)
-}
-
-type testNotifHandler struct {
-	calls int
-}
-
-func (h *testNotifHandler) HandleNotification(ctx context.Context, msg *Message) {
-	h.calls++
-	_ = msg.Close()
-}
-
+// All options given together take effect.
 func TestMultipleOptions(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	customCaps := []string{"urn:custom:cap:1.0"}
-	handler := &testNotifHandler{}
+	logs := &logRecorder{}
+	// WithCapability replaces the defaults, so a base capability must be
+	// included for the handshake to succeed.
+	customCaps := []string{CapNetConf10, CapNetConf11, "urn:custom:cap:1.0"}
+	calls := make(chan struct{}, 1)
 
-	session, err := NewSession(tt,
+	session, err := Open(context.Background(), tt,
 		WithCapability(customCaps...),
-		WithLogger(logger),
-		WithNotifHandler(handler),
+		WithLogger(slog.New(logs)),
+		WithNotifHandler(func(context.Context, *Message) { calls <- struct{}{} }),
 	)
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
 	be.True(t, session.ClientCaps().Has("urn:custom:cap:1.0"))
-	be.Equal(t, logger, session.logger)
-	be.Nonzero(t, session.notifHandler)
+
+	tt.Push(`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:56Z</eventTime></notification>`)
+	select {
+	case <-calls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("notification handler not called")
+	}
+	be.Equal(t, 0, len(logs.Records()))
 }
 
-func TestNewSession(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
+func TestOpenSuccess(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	be.Nonzero(t, session)
-	be.Nonzero(t, session.tr)
-	be.Nonzero(t, session.clientCaps)
-	be.Equal(t, 0, len(session.reqs))
-	be.Nonzero(t, session.notifCtx)
-	be.Nonzero(t, session.notifCancel)
-	be.Nonzero(t, session.logger)
-	be.Equal(t, uint64(0), session.sessionID)
-}
-
-func TestNewSessionSuccess(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 	be.Nonzero(t, session)
 
-	be.Equal(t, uint64(42), session.sessionID)
-	be.Nonzero(t, session.serverCaps)
+	be.Equal(t, uint64(42), session.SessionID())
 	be.True(t, session.ServerCaps().Has(CapNetConf10))
 }
 
-func TestNewSessionHandshakeFailure(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
+func TestOpenHelloFailure(t *testing.T) {
+	tt := netconftest.NewTransport(t, func(string) []string {
 		return []string{helloBadXML}
 	})
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.Nonzero(t, err)
 	be.Zero(t, session)
 
@@ -210,101 +187,46 @@ func TestNewSessionHandshakeFailure(t *testing.T) {
 	be.True(t, tt.Closed())
 }
 
-func TestNextMessageID(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
+// A caller that builds the rpc message itself keeps it as it was: the
+// session numbers a copy, and leaves a message-id the caller chose alone.
+func TestExecReplyWithRPCMessage(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
 
-	// Should start at 1 and increment
-	id1 := session.nextMessageID()
-	id2 := session.nextMessageID()
-	id3 := session.nextMessageID()
+	numbered := &RPC{Operation: "<get/>"}
+	reply, err := session.ExecReply(context.Background(), numbered)
+	be.NilErr(t, err)
+	be.In(t, `message-id="1"`, string(reply.Raw))
+	be.Equal(t, "", numbered.MessageID)
 
-	be.Equal(t, "1", id1)
-	be.Equal(t, "2", id2)
-	be.Equal(t, "3", id3)
+	chosen := &RPC{Operation: "<get/>", MessageID: "custom-id"}
+	reply, err = session.ExecReply(context.Background(), chosen)
+	be.NilErr(t, err)
+	be.In(t, `message-id="custom-id"`, string(reply.Raw))
+	be.In(t, `message-id="custom-id"`, tt.Outputs()[2])
 }
 
-func TestPrepareWithoutMessageID(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
+func TestOperationSuccess(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	rpc := &RPC{Operation: "test"}
-	prepared := session.Prepare(rpc)
-
-	be.Nonzero(t, len(prepared.MessageID))
-	be.Equal(t, "1", prepared.MessageID)
-}
-
-func TestPrepareWithMessageID(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
-
-	rpc := &RPC{Operation: "test", MessageID: "custom-id"}
-	prepared := session.Prepare(rpc)
-
-	be.Equal(t, "custom-id", prepared.MessageID)
-}
-
-func TestPrepareDoesNotMutate(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
-
-	rpc := &RPC{Operation: "test"}
-	prepared := session.Prepare(rpc)
-
-	// Original should not have message ID
-	be.Equal(t, 0, len(rpc.MessageID))
-	// Prepared should have message ID
-	be.Nonzero(t, len(prepared.MessageID))
-}
-
-func TestDoSuccess(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
 	rpc := NewRPC("test-op")
 	ctx := context.Background()
-	msg, err := session.Do(ctx, rpc)
+	reply, err := session.ExecReply(ctx, rpc)
 
 	be.NilErr(t, err)
-	be.Nonzero(t, msg)
-	defer func() {
-		_ = msg.Close()
-	}()
-
-	be.Equal(t, "1", msg.MessageID())
+	be.Nonzero(t, reply)
+	be.In(t, `message-id="1"`, string(reply.Raw))
 }
 
-func TestDoDuplicateMessageID(t *testing.T) {
-	tt := testutil.NewTransport(nil)
-	session := newSession(tt)
+func TestOperationContextCanceled(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	rpc := &RPC{Operation: "test", MessageID: "duplicate-id"}
-
-	// First request should register
-	ctx := context.Background()
-
-	// Create a pending request manually
-	session.mu.Lock()
-	session.reqs["duplicate-id"] = &pendingResp{
-		msg: make(chan *Message, 1),
-		ctx: ctx,
-	}
-	session.mu.Unlock()
-
-	// Second request with same ID should fail
-	_, err := session.Do(ctx, rpc)
-	be.Nonzero(t, err)
-	be.In(t, "already pending", err.Error())
-}
-
-func TestDoContextCanceled(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -312,17 +234,17 @@ func TestDoContextCanceled(t *testing.T) {
 	cancel() // Cancel immediately
 
 	rpc := NewRPC("test-op")
-	msg, err := session.Do(ctx, rpc)
+	reply, err := session.ExecReply(ctx, rpc)
 
 	be.Nonzero(t, err)
-	be.Zero(t, msg)
+	be.Zero(t, reply)
 	be.Equal(t, context.Canceled, err)
 }
 
-func TestDoSessionClosed(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+func TestOperationSessionClosed(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	// Close the transport to simulate connection loss
@@ -333,22 +255,19 @@ func TestDoSessionClosed(t *testing.T) {
 
 	rpc := NewRPC("test-op")
 	ctx := context.Background()
-	msg, err := session.Do(ctx, rpc)
+	reply, err := session.ExecReply(ctx, rpc)
 
 	be.Nonzero(t, err)
-	be.Zero(t, msg)
+	be.Zero(t, reply)
 }
 
 func TestExecSuccess(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
-		msgID := testutil.ExtractMessageID(req)
-		return []string{testutil.Reply(msgID, `<data><result>success</result></data>`)}
-	})
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.Reply(msgID, `<data><result>success</result></data>`)}
+	}))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -366,20 +285,17 @@ func TestExecSuccess(t *testing.T) {
 }
 
 func TestExecWithRPCError(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
-		msgID := testutil.ExtractMessageID(req)
-		return []string{testutil.Reply(msgID, `<rpc-error>
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.Reply(msgID, `<rpc-error>
 			<error-type>application</error-type>
 			<error-tag>operation-failed</error-tag>
 			<error-severity>error</error-severity>
 			<error-message>Test error</error-message>
 		</rpc-error>`)}
-	})
+	}))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -393,21 +309,18 @@ func TestExecWithRPCError(t *testing.T) {
 }
 
 func TestExecWithRPCWarning(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
-		msgID := testutil.ExtractMessageID(req)
-		return []string{testutil.Reply(msgID, `<rpc-error>
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.Reply(msgID, `<rpc-error>
 			<error-type>application</error-type>
 			<error-tag>operation-failed</error-tag>
 			<error-severity>warning</error-severity>
 			<error-message>Test warning</error-message>
 		</rpc-error>
 		<ok/>`)}
-	})
+	}))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -416,9 +329,9 @@ func TestExecWithRPCWarning(t *testing.T) {
 }
 
 func TestExecNilReply(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -428,9 +341,9 @@ func TestExecNilReply(t *testing.T) {
 }
 
 func TestExecContextCanceled(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -442,54 +355,32 @@ func TestExecContextCanceled(t *testing.T) {
 	be.Equal(t, context.Canceled, err)
 }
 
-func TestRecvMsgMissingMessageID(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	_, err := NewSession(tt)
-	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
-	// Push reply without message-id (should be logged and ignored)
-	tt.Push(`<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><ok/></rpc-reply>`)
-
-	// Give recvLoop time to process
-	time.Sleep(50 * time.Millisecond)
-}
-
-func TestRecvMsgUnexpectedReply(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	_, err := NewSession(tt)
-	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
-	// Push reply with message-id that doesn't match any pending request
-	tt.Push(`<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="999"><ok/></rpc-reply>`)
-
-	// Give recvLoop time to process
-	time.Sleep(50 * time.Millisecond)
-}
-
 func TestRecvMsgUnknownMessageType(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	_, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
 
 	// Push unknown message type
 	tt.Push(`<unknown-message xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"/>`)
 
-	// Give recvLoop time to process and exit
+	// Give recvLoop time to process
 	time.Sleep(100 * time.Millisecond)
 
-	// Transport should be closed
-	be.True(t, tt.Closed())
+	// Unknown messages are skipped; the session must stay usable
+	be.False(t, tt.Closed())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = session.Exec(ctx, "<get/>", nil)
+	be.NilErr(t, err)
 }
 
 func TestCloseSuccess(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	err = session.Close(context.Background())
@@ -498,22 +389,17 @@ func TestCloseSuccess(t *testing.T) {
 }
 
 func TestCloseWithPendingRequests(t *testing.T) {
-	// Handler that only responds to hello, not to RPCs
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
-		return nil // No response for RPCs
-	})
+	// a device that says hello and answers no RPC
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, nil))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	// Start a request in background
 	done := make(chan error, 1)
 	go func() {
 		rpc := NewRPC("test-op")
-		_, err := session.Do(context.Background(), rpc)
+		_, err := session.ExecReply(context.Background(), rpc)
 		done <- err
 	}()
 
@@ -526,37 +412,16 @@ func TestCloseWithPendingRequests(t *testing.T) {
 	// Request should receive ErrClosed
 	select {
 	case err := <-done:
-		be.Nonzero(t, err)
-		be.Equal(t, ErrClosed, err)
+		be.True(t, errors.Is(err, ErrClosed))
 	case <-time.After(1 * time.Second):
 		t.Fatal("timeout waiting for request to fail")
 	}
 }
 
-func TestCloseNotifContextCanceled(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt)
-	be.NilErr(t, err)
-
-	notifCtx := session.notifCtx
-
-	err = session.Close(context.Background())
-	be.NilErr(t, err)
-
-	// Notification context should be canceled
-	select {
-	case <-notifCtx.Done():
-		// Expected
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("notification context not canceled")
-	}
-}
-
 func TestConcurrentDo(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	const numRequests = 10
@@ -570,10 +435,7 @@ func TestConcurrentDo(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rpc := NewRPC("test-op")
-			msg, err := session.Do(context.Background(), rpc)
-			if err == nil && msg != nil {
-				_ = msg.Close()
-			}
+			_, err := session.ExecReply(context.Background(), rpc)
 			results[i] = err
 		}()
 	}
@@ -588,9 +450,9 @@ func TestConcurrentDo(t *testing.T) {
 	_ = tt.Close()
 }
 
-func TestConcurrentDoAndNotifications(t *testing.T) {
+func TestConcurrentOperationsAndNotifications(t *testing.T) {
 	received := make(chan string, 10)
-	handler := func(ctx context.Context, msg *Message) {
+	handler := func(_ context.Context, msg *Message) {
 		defer func() {
 			_ = msg.Close()
 		}()
@@ -598,32 +460,28 @@ func TestConcurrentDoAndNotifications(t *testing.T) {
 	}
 
 	rpcCount := 0
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
-		msgID := testutil.ExtractMessageID(req)
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
 		rpcCount++
 		// Interleave notifications with RPC replies
 		if rpcCount == 1 {
 			return []string{
 				`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:56Z</eventTime></notification>`,
-				testutil.OKReply(msgID),
+				netconftest.OKReply(msgID),
 				`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:57Z</eventTime></notification>`,
 			}
 		}
-		return []string{testutil.OKReply(msgID)}
-	})
+		return []string{netconftest.OKReply(msgID)}
+	}))
 
-	session, err := NewSession(tt, WithNotifHandlerFunc(handler))
+	session, err := Open(context.Background(), tt, WithNotifHandler(handler))
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
 	// Send RPC
 	rpc := NewRPC("test-op")
-	msg, err := session.Do(context.Background(), rpc)
+	_, err = session.ExecReply(context.Background(), rpc)
 	be.NilErr(t, err)
-	_ = msg.Close()
 
 	// Should have received both notifications
 	select {
@@ -642,9 +500,9 @@ func TestConcurrentDoAndNotifications(t *testing.T) {
 }
 
 func TestSessionID(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -652,9 +510,9 @@ func TestSessionID(t *testing.T) {
 }
 
 func TestClientCaps(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -664,9 +522,9 @@ func TestClientCaps(t *testing.T) {
 }
 
 func TestServerCaps(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -676,120 +534,16 @@ func TestServerCaps(t *testing.T) {
 	be.True(t, caps.Has(CapNetConf11))
 }
 
-func TestStartElement(t *testing.T) {
-	xmlData := `<?xml version="1.0"?>
-	<!-- comment -->
-	<root xmlns="test">content</root>`
-
-	decoder := xml.NewDecoder(strings.NewReader(xmlData))
-	elem, err := startElement(decoder)
-
-	be.NilErr(t, err)
-	be.Equal(t, "root", elem.Name.Local)
-	be.Equal(t, "test", elem.Name.Space)
-}
-
-func TestStartElementEOF(t *testing.T) {
-	xmlData := ``
-
-	decoder := xml.NewDecoder(strings.NewReader(xmlData))
-	elem, err := startElement(decoder)
-
-	be.Nonzero(t, err)
-	be.Zero(t, elem)
-	be.Equal(t, io.EOF, err)
-}
-
-func TestGetMessageID(t *testing.T) {
-	attrs := []xml.Attr{
-		{Name: xml.Name{Local: "xmlns"}, Value: "urn:test"},
-		{Name: xml.Name{Local: "message-id"}, Value: "12345"},
-		{Name: xml.Name{Local: "other"}, Value: "value"},
-	}
-
-	msgID := getMessageID(attrs)
-	be.Equal(t, "12345", msgID)
-}
-
-func TestGetMessageIDMissing(t *testing.T) {
-	attrs := []xml.Attr{
-		{Name: xml.Name{Local: "xmlns"}, Value: "urn:test"},
-		{Name: xml.Name{Local: "other"}, Value: "value"},
-	}
-
-	msgID := getMessageID(attrs)
-	be.Equal(t, "", msgID)
-}
-
-func TestMsgReaderClose(t *testing.T) {
-	buf := strings.NewReader("test content")
-	closed := false
-	closer := &testCloser{closeFn: func() error {
-		closed = true
-		return nil
-	}}
-
-	reader := &msgReader{
-		Reader: buf,
-		closer: closer,
-		done:   make(chan struct{}),
-	}
-
-	err := reader.Close()
-	be.NilErr(t, err)
-	be.True(t, closed)
-
-	// Check that done channel is closed
-	select {
-	case <-reader.done:
-		// Expected
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("done channel not closed")
-	}
-}
-
-func TestMsgReaderDoubleClose(t *testing.T) {
-	buf := strings.NewReader("test content")
-	closeCount := 0
-	closer := &testCloser{closeFn: func() error {
-		closeCount++
-		return nil
-	}}
-
-	reader := &msgReader{
-		Reader: buf,
-		closer: closer,
-		done:   make(chan struct{}),
-	}
-
-	_ = reader.Close()
-	_ = reader.Close()
-
-	// Should only close once due to sync.Once
-	be.Equal(t, 1, closeCount)
-}
-
-type testCloser struct {
-	closeFn func() error
-}
-
-func (tc *testCloser) Close() error {
-	if tc.closeFn != nil {
-		return tc.closeFn()
-	}
-	return nil
-}
-
 func TestNotificationMessageNotClosed(t *testing.T) {
 	handlerCalled := make(chan bool, 1)
-	handler := func(ctx context.Context, msg *Message) {
+	handler := func(context.Context, *Message) {
 		// Intentionally don't close the message
 		handlerCalled <- true
 	}
 
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	_, err := NewSession(tt, WithNotifHandlerFunc(handler))
+	_, err := Open(context.Background(), tt, WithNotifHandler(handler))
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -812,16 +566,16 @@ func TestNotificationMessageNotClosed(t *testing.T) {
 
 func TestNotificationConcurrent(t *testing.T) {
 	var count atomic.Int32
-	handler := func(ctx context.Context, msg *Message) {
+	handler := func(_ context.Context, msg *Message) {
 		defer func() {
 			_ = msg.Close()
 		}()
 		count.Add(1)
 	}
 
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	_, err := NewSession(tt, WithNotifHandlerFunc(handler))
+	_, err := Open(context.Background(), tt, WithNotifHandler(handler))
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 
@@ -838,40 +592,51 @@ func TestNotificationConcurrent(t *testing.T) {
 	be.Equal(t, int32(5), count.Load())
 }
 
-// upgradableTransport is a test transport that supports Upgrade()
-type upgradableTransport struct {
-	*testutil.Transport
-	upgraded bool
-}
-
-func (u *upgradableTransport) Upgrade() {
-	u.upgraded = true
-}
-
 func TestHandshakeUpgrade(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
-		return []string{`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
-			<capabilities>
-				<capability>urn:ietf:params:netconf:base:1.0</capability>
-				<capability>urn:ietf:params:netconf:base:1.1</capability>
-			</capabilities>
-			<session-id>42</session-id>
-		</hello>`}
-	})
-	ut := &upgradableTransport{Transport: tt}
+	// helloGood advertises base:1.1 and the client supports it by default
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	// Client also supports 1.1 by default
-	session, err := NewSession(ut)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-	be.Nonzero(t, session)
+	be.True(t, tt.Upgraded())
 
-	// Transport should have been upgraded
-	be.True(t, ut.upgraded)
+	// the two sides still understand each other in chunked framing
+	be.NilErr(t, session.Exec(context.Background(), "<get/>", nil))
+	be.NilErr(t, session.Close(context.Background()))
+}
+
+// A device may say more right behind its hello, before the client has got
+// round to switching to chunked framing.  That is chunked all the same: the
+// device switches as it sends its hello, not when the client does.
+func TestMessageRightBehindHello(t *testing.T) {
+	const notification = `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:56Z</eventTime></notification>`
+
+	// the two used to race, and the client lost about one time in fifteen
+	for range 200 {
+		tt := netconftest.NewTransport(t, func(req string) []string {
+			if strings.Contains(req, "<hello") {
+				return []string{helloGood, notification}
+			}
+			return []string{netconftest.OKReply(netconftest.ExtractMessageID(req))}
+		})
+
+		got := make(chan struct{}, 1)
+		session, err := Open(context.Background(), tt, WithNotifHandler(func(context.Context, *Message) { got <- struct{}{} }))
+		be.NilErr(t, err)
+
+		select {
+		case <-got:
+		case <-session.Done():
+			t.Fatalf("the session ended: %v", session.Err())
+		case <-time.After(5 * time.Second):
+			t.Fatal("the notification did not arrive")
+		}
+		be.NilErr(t, session.Close(context.Background()))
+	}
 }
 
 func TestHandshakeNoUpgradeWhenServerLacks11(t *testing.T) {
-	tt := testutil.NewTransport(func(req string) []string {
+	tt := netconftest.NewTransport(t, func(string) []string {
 		return []string{`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
 			<capabilities>
 				<capability>urn:ietf:params:netconf:base:1.0</capability>
@@ -879,20 +644,18 @@ func TestHandshakeNoUpgradeWhenServerLacks11(t *testing.T) {
 			<session-id>42</session-id>
 		</hello>`}
 	})
-	ut := &upgradableTransport{Transport: tt}
-
-	session, err := NewSession(ut)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = tt.Close() }()
 	be.Nonzero(t, session)
 
 	// Transport should NOT have been upgraded
-	be.False(t, ut.upgraded)
+	be.False(t, tt.Upgraded())
 }
 
-// errorTransport returns an error on Close()
+// errorTransport returns an error on Close().
 type errorTransport struct {
-	*testutil.Transport
+	*netconftest.Transport
 	closeErr error
 }
 
@@ -902,22 +665,22 @@ func (e *errorTransport) Close() error {
 }
 
 func TestCloseTransportError(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 	customErr := errors.New("custom transport error")
 	et := &errorTransport{Transport: tt, closeErr: customErr}
 
-	session, err := NewSession(et)
+	session, err := Open(context.Background(), et)
 	be.NilErr(t, err)
 
 	err = session.Close(context.Background())
 	be.Nonzero(t, err)
-	be.Equal(t, customErr, err)
+	be.True(t, errors.Is(err, customErr))
 }
 
 func TestNotificationHandler(t *testing.T) {
 	received := make(chan string, 10)
 
-	handler := func(ctx context.Context, msg *Message) {
+	handler := func(_ context.Context, msg *Message) {
 		defer func() { _ = msg.Close() }()
 
 		var notif Notification
@@ -929,11 +692,11 @@ func TestNotificationHandler(t *testing.T) {
 		received <- notif.EventTime.Format(time.RFC3339)
 	}
 
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt, WithNotifHandlerFunc(handler))
+	session, err := Open(context.Background(), tt, WithNotifHandler(handler))
 	be.NilErr(t, err)
-	be.Nonzero(t, session.notifHandler)
+	be.Nonzero(t, session)
 
 	// Push an unsolicited notification
 	tt.Push(`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0">
@@ -951,34 +714,23 @@ func TestNotificationHandler(t *testing.T) {
 	_ = tt.Close()
 }
 
+// The context handed to notification handlers ends with the session.
 func TestNotificationHandlerContextCanceled(t *testing.T) {
-	handler := func(ctx context.Context, msg *Message) {
-		defer func() { _ = msg.Close() }()
+	ctxCh := make(chan context.Context, 1)
+	handler := func(ctx context.Context, _ *Message) {
+		ctxCh <- ctx
 	}
 
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt, WithNotifHandlerFunc(handler))
+	tt := netconftest.NewTransport(t, echoHandler)
+	session, err := Open(context.Background(), tt, WithNotifHandler(handler))
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
 
-	// Verify context is not cancelled initially
-	select {
-	case <-session.notifCtx.Done():
-		t.Fatal("notification context should not be cancelled initially")
-	default:
-		// Expected
-	}
+	tt.Push(`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:56Z</eventTime></notification>`)
+	ctx := <-ctxCh
+	be.NilErr(t, ctx.Err())
 
-	// Close session and verify context is cancelled
-	_ = session.Close(context.Background())
-
-	select {
-	case <-session.notifCtx.Done():
-		// Expected - context should be cancelled
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("notification context not cancelled after session close")
-	}
+	be.NilErr(t, session.Close(context.Background()))
+	be.Nonzero(t, ctx.Err())
 }
 
 func TestNotificationDecoding(t *testing.T) {
@@ -996,89 +748,47 @@ func TestNotificationDecoding(t *testing.T) {
 	be.Equal(t, "2024-01-05T12:34:56Z", notif.EventTime.Format(time.RFC3339))
 }
 
+// Without a handler notifications are dropped and the session carries on.
+// They can only come after a <create-subscription> sent as literal XML, and
+// the log says which option is missing.
 func TestNotificationWithoutHandler(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	// Create session WITHOUT notification handler
-	session, err := NewSession(tt)
+	logs := &logRecorder{}
+	session, err := Open(context.Background(), tt, WithLogger(slog.New(logs)))
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-	be.Zero(t, session.notifHandler)
+	be.False(t, session.HasNotifHandler())
 
-	// Verify we can still use the session normally
-	be.Nonzero(t, session.notifCtx)
-	be.Nonzero(t, session.notifCancel)
-}
+	tt.Push(`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2024-01-05T12:34:56Z</eventTime></notification>`)
+	be.NilErr(t, session.Exec(context.Background(), "<get/>", nil))
+	be.Equal(t, "skipping a notification: the session has no handler, see WithNotifHandler", strings.Join(logs.Records(), "; "))
 
-func TestWithHelloTimeout(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt, WithHelloTimeout(5*time.Second))
+	with, err := Open(context.Background(), netconftest.NewTransport(t, echoHandler),
+		WithNotifHandler(func(context.Context, *Message) {}))
 	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
-	be.Equal(t, 5*time.Second, session.helloTimeout)
+	be.True(t, with.HasNotifHandler())
 }
 
-func TestWithHelloTimeoutDefault(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+func TestConcurrentOperationsAndClose(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
-	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
-	be.Equal(t, DefaultHelloTimeout, session.helloTimeout)
-}
-
-func TestHelloTimeoutExpired(t *testing.T) {
-	// Handler that never responds to hello
-	tt := testutil.NewTransport(func(req string) []string {
-		return nil // No response
-	})
-
-	// Use a very short timeout
-	_, err := NewSession(tt, WithHelloTimeout(50*time.Millisecond))
-	be.Nonzero(t, err)
-	be.In(t, "context deadline exceeded", err.Error())
-
-	// Transport should be closed on error
-	be.True(t, tt.Closed())
-}
-
-func TestHelloTimeoutDisabled(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	// Timeout of 0 means no timeout
-	session, err := NewSession(tt, WithHelloTimeout(0))
-	be.NilErr(t, err)
-	defer func() { _ = tt.Close() }()
-
-	be.Equal(t, time.Duration(0), session.helloTimeout)
-}
-
-func TestConcurrentDoAndClose(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
-
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	const numRequests = 5
 	var wg sync.WaitGroup
 	wg.Add(numRequests)
 
-	// Start concurrent Do() calls
+	// Start concurrent operations
 	for range numRequests {
 		go func() {
 			defer wg.Done()
 			rpc := NewRPC("test-op")
-			msg, _ := session.Do(context.Background(), rpc)
-			if msg != nil {
-				_ = msg.Close()
-			}
+			_, _ = session.ExecReply(context.Background(), rpc)
 		}()
 	}
 
-	// Close while Do() calls are in flight
+	// Close while operations are in flight
 	time.Sleep(10 * time.Millisecond)
 	err = session.Close(context.Background())
 	be.NilErr(t, err)
@@ -1090,18 +800,15 @@ func TestConcurrentDoAndClose(t *testing.T) {
 func TestQueueDrainsBeforeClose(t *testing.T) {
 	// Track how many messages were processed
 	var processed atomic.Int32
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
 		if !strings.Contains(req, "close-session") {
 			processed.Add(1)
 		}
-		msgID := testutil.ExtractMessageID(req)
-		return []string{testutil.OKReply(msgID)}
-	})
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.OKReply(msgID)}
+	}))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	const numRequests = 10
@@ -1113,10 +820,7 @@ func TestQueueDrainsBeforeClose(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rpc := NewRPC("test-op")
-			msg, err := session.Do(context.Background(), rpc)
-			if err == nil && msg != nil {
-				_ = msg.Close()
-			}
+			_, _ = session.ExecReply(context.Background(), rpc)
 		}()
 	}
 
@@ -1131,27 +835,21 @@ func TestQueueDrainsBeforeClose(t *testing.T) {
 	be.Equal(t, int32(numRequests), processed.Load())
 }
 
-func TestDoWhileClosing(t *testing.T) {
+func TestOperationWhileClosing(t *testing.T) {
 	// Handler that delays to ensure we catch the closing state
-	tt := testutil.NewTransport(func(req string) []string {
-		if strings.Contains(req, "<hello") {
-			return []string{helloGood}
-		}
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
 		time.Sleep(50 * time.Millisecond)
-		msgID := testutil.ExtractMessageID(req)
-		return []string{testutil.OKReply(msgID)}
-	})
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.OKReply(msgID)}
+	}))
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	// Start a request
 	go func() {
 		rpc := NewRPC("test-op")
-		msg, _ := session.Do(context.Background(), rpc)
-		if msg != nil {
-			_ = msg.Close()
-		}
+		_, _ = session.ExecReply(context.Background(), rpc)
 	}()
 
 	// Give it time to start
@@ -1165,14 +863,11 @@ func TestDoWhileClosing(t *testing.T) {
 
 	// Try to send another request while closing
 	rpc := NewRPC("test-op-2")
-	msg, err := session.Do(context.Background(), rpc)
-	be.NilErr(t, err)
-
-	// Either succeeds if queued before close, or fails with ErrClosed
-	if msg != nil {
-		_ = msg.Close()
+	// Close refuses new operations, so this either got in first or fails
+	// with ErrClosed.
+	if _, err := session.ExecReply(context.Background(), rpc); err != nil {
+		be.True(t, errors.Is(err, ErrClosed))
 	}
-	// Don't assert on error - it's a race whether we queue before close
 
 	// Close should complete without hanging
 	select {
@@ -1184,9 +879,9 @@ func TestDoWhileClosing(t *testing.T) {
 }
 
 func TestQueueSendContextCanceled(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 	defer func() { _ = session.Close(context.Background()) }()
 
@@ -1196,16 +891,16 @@ func TestQueueSendContextCanceled(t *testing.T) {
 
 	// Should fail immediately with context.Canceled
 	rpc := NewRPC("test-op")
-	msg, err := session.Do(ctx, rpc)
+	reply, err := session.ExecReply(ctx, rpc)
 	be.Nonzero(t, err)
-	be.Zero(t, msg)
+	be.Zero(t, reply)
 	be.Equal(t, context.Canceled, err)
 }
 
-func TestDoAfterClose(t *testing.T) {
-	tt := testutil.NewTransport(echoHandler)
+func TestOperationAfterClose(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
 
-	session, err := NewSession(tt)
+	session, err := Open(context.Background(), tt)
 	be.NilErr(t, err)
 
 	// Close the session
@@ -1214,8 +909,224 @@ func TestDoAfterClose(t *testing.T) {
 
 	// Try to send a request after close
 	rpc := NewRPC("test-op")
-	msg, err := session.Do(context.Background(), rpc)
+	reply, err := session.ExecReply(context.Background(), rpc)
 	be.Nonzero(t, err)
-	be.Zero(t, msg)
+	be.Zero(t, reply)
 	be.Equal(t, ErrClosed, err)
+}
+
+// TestAbandonedReplyRace exercises the race where the operation's context fires just
+// as the reply arrives.  The receive loop must reclaim the abandoned message
+// instead of wedging forever.
+func TestAbandonedReplyRace(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	for i := range 500 {
+		timeout := time.Duration(i%50+1) * 10 * time.Microsecond
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_, _ = session.ExecReply(ctx, "<get/>")
+		cancel()
+	}
+
+	// The session must still be usable.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = session.ExecReply(ctx, "<get/>")
+	be.NilErr(t, err)
+}
+
+// TestOperationCloseRace hammers operations from multiple goroutines while Close runs.  A
+// send racing shutdown must return ErrClosed, never panic on a closed
+// channel.
+func TestOperationCloseRace(t *testing.T) {
+	for range 100 {
+		tt := netconftest.NewTransport(t, echoHandler)
+
+		session, err := Open(context.Background(), tt)
+		be.NilErr(t, err)
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				for {
+					if _, err := session.ExecReply(ctx, "<get/>"); err != nil {
+						return
+					}
+				}
+			})
+		}
+
+		_ = session.Close(context.Background())
+		wg.Wait()
+		_ = tt.Close()
+	}
+}
+
+// TestNotifHandlerExec verifies a notification handler can issue RPCs on the
+// same session without deadlocking the receive loop.
+func TestNotifHandlerExec(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	done := make(chan error, 1)
+	var session *Session
+
+	handler := func(context.Context, *Message) {
+		execCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- session.Exec(execCtx, "<get/>", nil)
+	}
+
+	session, err := Open(context.Background(), tt, WithNotifHandler(handler))
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	tt.Push(`<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-01-01T00:00:00Z</eventTime><event/></notification>`)
+
+	select {
+	case err := <-done:
+		be.NilErr(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("notification handler deadlocked")
+	}
+}
+
+// TestExecErrorNoSeverity ensures rpc-errors from non-conforming servers
+// that omit <error-severity> are still surfaced as errors.
+func TestExecErrorNoSeverity(t *testing.T) {
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
+		return []string{netconftest.Reply(msgID,
+			`<rpc-error><error-type>protocol</error-type><error-tag>operation-failed</error-tag></rpc-error>`)}
+	}))
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = session.Exec(ctx, "<get/>", nil)
+	be.Nonzero(t, err)
+
+	var rpcErrs RPCErrors
+	be.True(t, errors.As(err, &rpcErrs))
+}
+
+// TestCloseReportsRPCError ensures a close-session failure is reported
+// instead of silently discarded.
+func TestCloseReportsRPCError(t *testing.T) {
+	tt := netconftest.NewTransport(t, netconftest.Hello(helloGood, func(req string) []string {
+		msgID := netconftest.ExtractMessageID(req)
+		if strings.Contains(req, "<close-session") {
+			return []string{netconftest.Reply(msgID,
+				`<rpc-error><error-type>protocol</error-type><error-tag>operation-failed</error-tag><error-severity>error</error-severity></rpc-error>`)}
+		}
+		return []string{netconftest.OKReply(msgID)}
+	}))
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+
+	err = session.Close(context.Background())
+	be.Nonzero(t, err)
+
+	var rpcErrs RPCErrors
+	be.True(t, errors.As(err, &rpcErrs))
+}
+
+// TestMessageReadAfterClose ensures reads on a closed message error instead
+// of observing a later message's bytes.
+func TestMessageReadAfterClose(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	msg, err := session.Stream(ctx, "<get/>")
+	be.NilErr(t, err)
+	be.NilErr(t, msg.Close())
+
+	_, err = msg.Read(make([]byte, 1))
+	be.Nonzero(t, err)
+	be.True(t, errors.Is(err, ErrClosed))
+}
+
+func TestStream(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	msg, err := session.Stream(ctx, NewRPC("<get/>"))
+	be.NilErr(t, err)
+
+	body, err := io.ReadAll(msg)
+	be.NilErr(t, err)
+	be.In(t, "<ok/>", string(body))
+	be.NilErr(t, msg.Close())
+
+	// Session must be free for the next RPC after Close.
+	err = session.Exec(ctx, "<get/>", nil)
+	be.NilErr(t, err)
+}
+
+// TestStreamAbandonedReplyRace exercises the reclaim path: a Stream whose
+// context fires as the reply arrives must not wedge the receive loop.
+func TestStreamAbandonedReplyRace(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	for i := range 500 {
+		timeout := time.Duration(i%50+1) * 10 * time.Microsecond
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		msg, err := session.Stream(ctx, NewRPC("<get/>"))
+		if err == nil {
+			_ = msg.Close()
+		}
+		cancel()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = session.ExecReply(ctx, "<get/>")
+	be.NilErr(t, err)
+}
+
+// TestRepliesAreIndependent verifies buffered replies don't gate the receive
+// loop: two replies can be held unclosed simultaneously.
+func TestRepliesAreIndependent(t *testing.T) {
+	tt := netconftest.NewTransport(t, echoHandler)
+
+	session, err := Open(context.Background(), tt)
+	be.NilErr(t, err)
+	defer func() { _ = tt.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, err := session.ExecReply(ctx, "<get/>")
+	be.NilErr(t, err)
+
+	// Nothing has to be done with the first reply for the next one to come.
+	second, err := session.ExecReply(ctx, "<get/>")
+	be.NilErr(t, err)
+
+	be.In(t, `message-id="1"`, string(first.Raw))
+	be.In(t, `message-id="2"`, string(second.Raw))
 }

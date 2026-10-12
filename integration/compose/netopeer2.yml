@@ -1,0 +1,46 @@
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: integration/docker/Dockerfile.runner
+      target: runner
+    environment:
+      NETCONF_DUT_SSHHOST: netopeer2
+      NETCONF_DUT_SSHPORT: 830
+      NETCONF_DUT_SSHUSER: netconf
+      NETCONF_DUT_SSHPASS: netconf
+      NETCONF_DUT_FLAVOR: netopeer2
+      # this server is there to be written to
+      NETCONF_DUT_CHANGE_COMMIT: 1
+      NETCONF_DUT_TRACE: 1
+      # the second run of the suite: over the ssh of the system, with the
+      # key the netopeer2 image was built with
+      SSH_COMMAND: >-
+        ssh -s -p 830 -i /keys/id_ed25519
+        -o BatchMode=yes
+        -o UserKnownHostsFile=/dev/null
+        -o StrictHostKeyChecking=no
+        -o LogLevel=ERROR
+        netconf-key@netopeer2 netconf
+    volumes:
+      - keys:/keys:ro
+    depends_on:
+      - netopeer2
+    command: >
+      sh -c "./wait-for-hello.sh
+      -s $$NETCONF_DUT_SSHPASS
+      -p $$NETCONF_DUT_SSHPORT
+      $$NETCONF_DUT_SSHUSER@$$NETCONF_DUT_SSHHOST &&
+      ./integration.test -test.v &&
+      NETCONF_DUT_COMMAND=\"$$SSH_COMMAND\" ./integration.test -test.v"
+  netopeer2:
+    build:
+      context: ../docker
+      dockerfile: Dockerfile.netopeer2
+      # FROM alpine is the newest one, not the one this machine happens to have
+      pull: true
+    volumes:
+      - keys:/keys
+
+volumes:
+  keys:

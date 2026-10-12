@@ -1,25 +1,61 @@
 version: "2"
+run:
+  build-tags:
+    - integration
 linters:
   enable:
+    - errname
     - errorlint
+    - exhaustive
+    - goconst
+    - gocritic
+    - godot
+    - misspell
+    - noctx
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
   settings:
     errorlint:
       errorf: true
       asserts: true
       comparison: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # value receivers on operation types are part of the public API
+        - hugeParam
+    revive:
+      # Listing rules replaces revive's default set unless this is set, which
+      # would leave only the one disabled rule and so nothing running.
+      enable-default-rules: true
+      rules:
+        - name: unexported-return
+          disabled: true
   exclusions:
     generated: lax
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+    rules:
+      # tests repeat names and XML snippets on purpose
+      - path: _test\.go
+        linters:
+          - goconst
 formatters:
   enable:
     - gofmt
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/lasseh/netconf
   exclusions:
     generated: lax
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

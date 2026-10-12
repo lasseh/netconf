@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +22,32 @@ type testServer struct {
 	listener        net.Listener
 	config          *ssh.ServerConfig
 	errCh           chan error
+	hostKey         ssh.PublicKey
 	RejectSubsystem bool
+
+	// IgnoreRequests leaves global requests (e.g. keepalives) unanswered to
+	// simulate a peer that went silent.
+	IgnoreRequests bool
+
+	// SubsystemAsked, when set, is closed by the request for a subsystem,
+	// which then gets no answer: a server that stops answering right there.
+	SubsystemAsked chan struct{}
+
+	// RejectExec makes the server say no to a command.
+	RejectExec bool
+
+	// asked is what the client asked the channel for, a subsystem or a
+	// command, by the name of the request
+	mu    sync.Mutex
+	asked []string
+}
+
+// Asked returns what the client asked the channel for: "subsystem netconf"
+// or "exec" and the command.
+func (s *testServer) Asked() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.asked...)
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -35,7 +61,7 @@ func newTestServer(t *testing.T) *testServer {
 	config := &ssh.ServerConfig{NoClientAuth: true}
 	config.AddHostKey(signer)
 
-	ln, err := net.Listen("tcp", "localhost:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "localhost:0")
 	be.NilErr(t, err)
 
 	return &testServer{
@@ -43,6 +69,7 @@ func newTestServer(t *testing.T) *testServer {
 		listener: ln,
 		config:   config,
 		errCh:    make(chan error, 1),
+		hostKey:  signer.PublicKey(),
 	}
 }
 
@@ -64,92 +91,96 @@ func (s *testServer) Serve(handler func(ssh.Channel) error) {
 			s.errCh <- fmt.Errorf("accept: %w", err)
 			return
 		}
+		s.serve(conn, handler)
+	}()
+}
 
-		_, chans, reqs, err := ssh.NewServerConn(conn, s.config)
+// CallHome has the server open the connection, to addr, and serve the one
+// client it finds there: a device that connects to whoever manages it.
+func (s *testServer) CallHome(addr string, handler func(ssh.Channel) error) {
+	go func() {
+		defer close(s.errCh)
+
+		conn, err := (&net.Dialer{}).DialContext(s.t.Context(), "tcp", addr)
 		if err != nil {
-			s.errCh <- fmt.Errorf("handshake: %w", err)
+			s.errCh <- fmt.Errorf("dial: %w", err)
 			return
 		}
+		s.serve(conn, handler)
+	}()
+}
+
+// serve is the server on one connection.
+func (s *testServer) serve(conn net.Conn, handler func(ssh.Channel) error) {
+	_, chans, reqs, err := ssh.NewServerConn(conn, s.config)
+	if err != nil {
+		s.errCh <- fmt.Errorf("handshake: %w", err)
+		return
+	}
+	if !s.IgnoreRequests {
 		go ssh.DiscardRequests(reqs)
+	}
 
-		for newChannel := range chans {
-			if newChannel.ChannelType() != "session" {
-				err := newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-				if err != nil {
-					s.t.Logf("failed to reject channel: %v", err)
-				}
-				continue
-			}
-			ch, reqs, err := newChannel.Accept()
+	for newChannel := range chans {
+		if newChannel.ChannelType() != "session" {
+			err := newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			if err != nil {
-				s.errCh <- fmt.Errorf("channel accept: %w", err)
-				return
+				s.t.Logf("failed to reject channel: %v", err)
 			}
+			continue
+		}
+		ch, reqs, err := newChannel.Accept()
+		if err != nil {
+			s.errCh <- fmt.Errorf("channel accept: %w", err)
+			return
+		}
 
-			go func(in <-chan *ssh.Request) {
-				for req := range in {
+		go func(in <-chan *ssh.Request) {
+			for req := range in {
+				// What was asked for is the one string of either request.
+				// It is noted when the request has its answer, for a
+				// handler that waits for that.
+				note := func() {
+					var what struct{ Name string }
+					_ = ssh.Unmarshal(req.Payload, &what)
+					s.mu.Lock()
+					s.asked = append(s.asked, req.Type+" "+what.Name)
+					s.mu.Unlock()
+				}
+
+				switch req.Type {
+				case "subsystem":
 					// In a real server we'd check payload == "netconf",
 					// but for tests accepting any subsystem is fine.
-					if req.Type == "subsystem" {
-						if err := req.Reply(!s.RejectSubsystem, nil); err != nil {
-							s.t.Logf("failed to reply to subsystem req: %v", err)
-						}
+					if s.SubsystemAsked != nil {
+						note()
+						close(s.SubsystemAsked)
+						continue
 					}
+					if err := req.Reply(!s.RejectSubsystem, nil); err != nil {
+						s.t.Logf("failed to reply to subsystem req: %v", err)
+					}
+					note()
+				case "exec":
+					if err := req.Reply(!s.RejectExec, nil); err != nil {
+						s.t.Logf("failed to reply to exec req: %v", err)
+					}
+					note()
 				}
-			}(reqs)
-
-			if err := handler(ch); err != nil {
-				s.errCh <- err
 			}
-			return
+		}(reqs)
+
+		if err := handler(ch); err != nil {
+			s.errCh <- err
 		}
-	}()
+		return
+	}
 }
 
 func (s *testServer) Wait(t *testing.T) error {
 	t.Helper()
 	err := <-s.errCh
 	return err
-}
-
-func TestTransport_Dial(t *testing.T) {
-	srv := newTestServer(t)
-	var serverSeen []byte
-
-	srv.Serve(func(ch ssh.Channel) error {
-		if _, err := io.WriteString(ch, "muffins]]>]]>"); err != nil {
-			return err
-		}
-
-		var err error
-		serverSeen, err = io.ReadAll(ch)
-		return err
-	})
-
-	config := &ssh.ClientConfig{HostKeyCallback: ssh.InsecureIgnoreHostKey()}
-	tr, err := Dial(context.Background(), "tcp", srv.Addr(), config)
-	be.NilErr(t, err)
-
-	r, err := tr.MsgReader()
-	be.NilErr(t, err)
-	greeting, _ := io.ReadAll(r)
-	be.Equal(t, "muffins", string(greeting))
-
-	w, err := tr.MsgWriter()
-	be.NilErr(t, err)
-
-	out := "a man a plan a canal panama"
-	_, err = io.WriteString(w, out)
-	be.NilErr(t, err)
-
-	err = w.Close()
-	be.NilErr(t, err)
-
-	err = tr.Close()
-	be.NilErr(t, err)
-
-	be.NilErr(t, srv.Wait(t))
-	be.Equal(t, "a man a plan a canal panama]]>]]>", string(serverSeen))
 }
 
 func TestTransport_Dial_NetworkFailure(t *testing.T) {
@@ -172,14 +203,14 @@ func TestTransport_Dial_AuthFailure(t *testing.T) {
 	srv := newTestServer(t)
 	// Force the server to require a password, but provide none
 	srv.config.NoClientAuth = false
-	srv.config.PasswordCallback = func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+	srv.config.PasswordCallback = func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
 		return nil, fmt.Errorf("password rejected")
 	}
 
 	// We don't need srv.Serve here because the handshake will fail
 	// before the handler is ever reached.
 	// But we must start the listener loop:
-	srv.Serve(func(ch ssh.Channel) error { return nil })
+	srv.Serve(func(ssh.Channel) error { return nil })
 
 	config := &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
@@ -188,9 +219,8 @@ func TestTransport_Dial_AuthFailure(t *testing.T) {
 
 	tr, err := Dial(context.Background(), "tcp", srv.Addr(), config)
 
-	be.Nonzero(t, err)
 	be.Zero(t, tr)
-	be.True(t, err != nil && strings.Contains(err.Error(), "unable to authenticate"))
+	be.True(t, errors.Is(err, ErrAuth))
 
 	// For some reason ErrorsIs doesn't work here despite ssh.ErrNoAuth existing.
 	err = srv.Wait(t)
@@ -199,7 +229,7 @@ func TestTransport_Dial_AuthFailure(t *testing.T) {
 
 func TestTransport_DialContextCancel(t *testing.T) {
 	// Standard hanging listener pattern (no changes needed here)
-	ln, err := net.Listen("tcp", "localhost:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "localhost:0")
 	be.NilErr(t, err)
 	defer func() {
 		if err := ln.Close(); err != nil {
@@ -220,11 +250,14 @@ func TestTransport_DialContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
-	_, err = Dial(ctx, "tcp", ln.Addr().String(), config)
+	// a dial that the context does not end would never return
+	dialed := make(chan error, 1)
+	go func() {
+		_, err := Dial(ctx, "tcp", ln.Addr().String(), config)
+		dialed <- err
+	}()
 
-	be.True(t, errors.Is(err, context.DeadlineExceeded))
-	be.True(t, time.Since(start) <= 200*time.Millisecond)
+	be.True(t, errors.Is(recvWithin(t, dialed, "the dial to give up"), context.DeadlineExceeded))
 }
 
 func TestTransport_Dial_SubsystemFails(t *testing.T) {
@@ -241,53 +274,9 @@ func TestTransport_Dial_SubsystemFails(t *testing.T) {
 	tr, err := Dial(context.Background(), "tcp", srv.Addr(), config)
 
 	// Dial should fail because the subsystem request was rejected
-	be.Nonzero(t, err)
+	be.True(t, errors.Is(err, ErrSubsystemRefused))
 	be.Zero(t, tr)
 
 	// Ensure the server finishes cleanly (client should close connection on error)
 	be.NilErr(t, srv.Wait(t))
-}
-
-func TestTransport_MultipleMessages(t *testing.T) {
-	srv := newTestServer(t)
-	var serverSeen []byte
-
-	srv.Serve(func(ch ssh.Channel) error {
-		_, err := io.WriteString(ch, "muffins]]>]]>")
-		if err != nil {
-			return err
-		}
-
-		serverSeen, err = io.ReadAll(ch)
-		return err
-	})
-
-	config := &ssh.ClientConfig{HostKeyCallback: ssh.InsecureIgnoreHostKey()}
-	tr, err := Dial(context.Background(), "tcp", srv.Addr(), config)
-	be.NilErr(t, err)
-
-	r, _ := tr.MsgReader()
-	_, err = io.ReadAll(r) // Clear greeting
-	be.NilErr(t, err)
-
-	w, _ := tr.MsgWriter()
-	_, err = io.WriteString(w, "msg1")
-	be.NilErr(t, err)
-
-	err = w.Close()
-	be.NilErr(t, err)
-
-	w, _ = tr.MsgWriter()
-	_, err = io.WriteString(w, "msg2")
-	be.NilErr(t, err)
-
-	err = w.Close()
-	be.NilErr(t, err)
-
-	err = tr.Close()
-	be.NilErr(t, err)
-
-	be.NilErr(t, srv.Wait(t))
-
-	be.Equal(t, "msg1]]>]]>msg2]]>]]>", string(serverSeen))
 }

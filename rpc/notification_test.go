@@ -3,10 +3,14 @@ package rpc
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/carlmjohnson/be"
+
+	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/internal/netconftest"
 )
 
 func TestCreateSubscriptionMarshalXML(t *testing.T) {
@@ -135,7 +139,7 @@ func TestCreateSubscriptionExec(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			session, _ := mockSession(t, tc.serverReply)
+			session := mockSession(t, tc.serverReply)
 
 			err := tc.op.Exec(context.Background(), session)
 			if tc.shouldErr {
@@ -145,4 +149,42 @@ func TestCreateSubscriptionExec(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A subscription on a session that has nowhere to deliver notifications is
+// refused before the device hears of it.  Each notification would count as a
+// message nobody asked for, and the session would end after a hundred of
+// them: within seconds on Junos, which sends hundreds for one commit.
+func TestCreateSubscription_NeedsAHandler(t *testing.T) {
+	const hello = `<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability></capabilities><session-id>42</session-id></hello>`
+	device := func(t *testing.T) *netconftest.Transport {
+		return netconftest.NewTransport(t, netconftest.Hello(hello, func(req string) []string {
+			return []string{netconftest.OKReply(netconftest.ExtractMessageID(req))}
+		}))
+	}
+
+	t.Run("without a handler", func(t *testing.T) {
+		tr := device(t)
+		sess, err := netconf.Open(t.Context(), tr)
+		be.NilErr(t, err)
+
+		err = CreateSubscription{}.Exec(t.Context(), sess)
+		be.True(t, errors.Is(err, netconf.ErrNoNotifHandler))
+		be.In(t, "create-subscription: ", err.Error())
+		be.In(t, "WithNotifHandler", err.Error())
+
+		// nothing but the hello went out, and the session is good for more
+		be.Equal(t, 1, len(tr.Outputs()))
+		be.NilErr(t, sess.Exec(t.Context(), "<get/>", nil))
+	})
+
+	t.Run("with a handler", func(t *testing.T) {
+		tr := device(t)
+		sess, err := netconf.Open(t.Context(), tr, netconf.WithNotifHandler(func(context.Context, *netconf.Message) {}))
+		be.NilErr(t, err)
+
+		be.NilErr(t, CreateSubscription{}.Exec(t.Context(), sess))
+		be.Equal(t, 2, len(tr.Outputs()))
+		be.In(t, "<create-subscription", tr.Outputs()[1])
+	})
 }

@@ -2,10 +2,15 @@ package rpc
 
 import (
 	"encoding/xml"
+	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/lasseh/netconf/internal/xmlutil"
 )
 
+// Filter limits what a retrieval operation returns.  Create one with
+// SubtreeFilter or XPathFilter.
 type Filter interface {
 	xml.Marshaler
 	filter()
@@ -20,25 +25,12 @@ func (f subtreeFilter) filter() {}
 func (f subtreeFilter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "type"}, Value: "subtree"})
 
-	switch v := f.f.(type) {
-	case string:
-		inner := struct {
-			Data string `xml:",innerxml"`
-		}{Data: v}
-		return e.EncodeElement(&inner, start)
-	case []byte:
-		inner := struct {
-			Data []byte `xml:",innerxml"`
-		}{Data: v}
-		return e.EncodeElement(&inner, start)
-	default:
-		return e.EncodeElement(f.f, start)
-
-	}
+	return xmlutil.EncodePayload(e, start, f.f)
 }
 
-// SubtreeFilter creates a filter matching the provided XML structure(s).
-// Multiple arguments are merged into a single filter element as siblings.
+// SubtreeFilter creates a filter matching the provided XML structure: a
+// string or []byte holding literal XML, or a value that marshals to the
+// filter's top-level element.
 func SubtreeFilter(filter any) Filter {
 	return subtreeFilter{f: filter}
 }
@@ -57,6 +49,9 @@ func (f xpathFilter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	)
 
 	for _, prefix := range slices.Sorted(maps.Keys(f.Namespaces)) {
+		if !xmlutil.ValidNCName(prefix) {
+			return fmt.Errorf("xpath filter: invalid namespace prefix: %q", prefix)
+		}
 		uri := f.Namespaces[prefix]
 		attrName := "xmlns:" + prefix
 		start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: attrName}, Value: uri})

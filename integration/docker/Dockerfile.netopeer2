@@ -1,0 +1,76 @@
+FROM alpine AS build
+
+# bash and openssl are for the scripts that installing netopeer2 runs.  With
+# linux-headers sysrepo waits on futexes, as it does on other distributions.
+RUN apk add --no-cache \
+    bash \
+    cmake \
+    curl-dev \
+    gcc \
+    libssh-dev \
+    linux-headers \
+    make \
+    musl-dev \
+    openssh-keygen \
+    openssl \
+    openssl-dev \
+    pcre2-dev \
+    pkgconf
+
+# The master branch of each project is its latest release.  Docker asks GitHub
+# where it is on every build: a new release is picked up without a rebuild
+# from nothing, and no build works without GitHub.  A release build keeps the
+# sysrepo repository in /etc/sysrepo, where the second stage takes it from.
+
+ADD https://github.com/CESNET/libyang.git#master /src/libyang
+RUN cmake -S /src/libyang -B /build/libyang -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /build/libyang -j "$(nproc)" && \
+    cmake --install /build/libyang
+
+ADD https://github.com/CESNET/libnetconf2.git#master /src/libnetconf2
+RUN cmake -S /src/libnetconf2 -B /build/libnetconf2 -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /build/libnetconf2 -j "$(nproc)" && \
+    cmake --install /build/libnetconf2
+
+ADD https://github.com/sysrepo/sysrepo.git#master /src/sysrepo
+RUN cmake -S /src/sysrepo -B /build/sysrepo -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /build/sysrepo -j "$(nproc)" && \
+    cmake --install /build/sysrepo
+
+# Installing netopeer2 puts its YANG modules, a host key and an SSH endpoint
+# on port 830 into the startup configuration.
+ADD https://github.com/CESNET/netopeer2.git#master /src/netopeer2
+RUN cmake -S /src/netopeer2 -B /build/netopeer2 -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /build/netopeer2 -j "$(nproc)" && \
+    cmake --install /build/netopeer2
+
+# Who may log in to that endpoint is part of the configuration as well: a
+# system user is not enough.  One user has a password and one a key.  The
+# key is made here, so none is kept anywhere but in the image: its public
+# half goes into the configuration, and the private half to the runner of
+# the suite when the server starts.
+COPY netopeer2-user.xml netopeer2-nacm.xml /tmp/
+RUN sysrepocfg --edit=/tmp/netopeer2-nacm.xml --datastore startup --module ietf-netconf-acm && \
+    mkdir /etc/netconf-test && \
+    ssh-keygen -q -t ed25519 -N "" -C integration -f /etc/netconf-test/id_ed25519 && \
+    sed -i "s|PUBLIC_KEY|$(cut -d' ' -f2 /etc/netconf-test/id_ed25519.pub)|" /tmp/netopeer2-user.xml && \
+    sysrepocfg --edit=/tmp/netopeer2-user.xml --datastore startup --module ietf-netconf-server
+
+FROM alpine
+
+# --upgrade brings what these depend on, OpenSSL among it, to the versions
+# the first stage built against: the base image can be behind.
+RUN apk add --no-cache --upgrade \
+    libcurl \
+    libssh \
+    pcre2
+
+COPY --from=build /usr/local /usr/local
+COPY --from=build /etc/sysrepo /etc/sysrepo
+COPY --from=build /etc/netconf-test /etc/netconf-test
+
+EXPOSE 830
+
+# The private key of the test user goes where the runner of the suite finds
+# it, a volume the two share, when there is one.
+CMD ["sh", "-c", "if [ -d /keys ]; then cp /etc/netconf-test/id_ed25519 /keys/; fi; exec netopeer2-server -d -v2"]

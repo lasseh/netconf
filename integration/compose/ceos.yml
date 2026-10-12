@@ -1,0 +1,36 @@
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: integration/docker/Dockerfile.runner
+      target: runner
+    environment:
+      NETCONF_DUT_SSHHOST: ceos
+      NETCONF_DUT_SSHPORT: 830
+      NETCONF_DUT_SSHUSER: admin
+      NETCONF_DUT_SSHPASS: admin
+      NETCONF_DUT_FLAVOR: eos
+    depends_on:
+      - ceos
+    command: >
+      sh -c "./wait-for-hello.sh
+      -s $$NETCONF_DUT_SSHPASS
+      -p $$NETCONF_DUT_SSHPORT
+      $$NETCONF_DUT_SSHUSER@$$NETCONF_DUT_SSHHOST &&
+      ./integration.test -test.v"
+  ceos:
+    image: ${CEOS_IMAGE:?}
+    platform: "linux/amd64"
+    environment:
+      CEOS: 1
+      container: docker
+      EOS_PLATFORM: ceoslab
+      SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT: 1
+      ETBA: 1
+      INTFTYPE: eth
+    privileged: true
+    tty: true
+    stop_signal: SIGTERM
+    command: sh -c "cp /mnt/flash/initial-config /mnt/flash/startup-config; exec /sbin/init"
+    volumes:
+      - ../testdata/ceos.conf:/mnt/flash/initial-config:ro

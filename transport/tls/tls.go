@@ -1,3 +1,9 @@
+// Package tls is the NETCONF over TLS transport of RFC 7589.
+//
+// The package name collides with crypto/tls, so it is usually imported under
+// another name:
+//
+//	import nctls "github.com/lasseh/netconf/transport/tls"
 package tls
 
 import (
@@ -5,10 +11,10 @@ import (
 	"crypto/tls"
 	"net"
 
-	"nemith.io/netconf/transport"
+	"github.com/lasseh/netconf/transport"
 )
 
-// alias it to a private type so we can make it private when embedding
+// alias it to a private type so we can make it private when embedding.
 type framer = transport.Framer
 
 // Transport implements RFC7589 for implementing NETCONF over TLS.
@@ -30,6 +36,21 @@ func Dial(ctx context.Context, network, addr string, config *tls.Config) (*Trans
 	conn, err := d.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
+	}
+
+	// Like tls.Dial, verify the certificate against the host being dialed
+	// unless the caller chose a name.
+	if config == nil {
+		config = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	if config.ServerName == "" && !config.InsecureSkipVerify {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		config = config.Clone()
+		config.ServerName = host
 	}
 
 	tlsConn := tls.Client(conn, config)

@@ -2,6 +2,7 @@ package netconf
 
 import (
 	"encoding/xml"
+	"errors"
 	"testing"
 
 	"github.com/carlmjohnson/be"
@@ -65,12 +66,12 @@ func TestRawXMLMarshal(t *testing.T) {
 var helloMsgTestTable = []struct {
 	name string
 	raw  []byte
-	msg  Hello
+	msg  helloMessage
 }{
 	{
 		name: "basic",
 		raw:  []byte(`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability><capability>urn:ietf:params:netconf:base:1.1</capability></capabilities></hello>`),
-		msg: Hello{
+		msg: helloMessage{
 			XMLName: xml.Name{
 				Local: "hello",
 				Space: "urn:ietf:params:xml:ns:netconf:base:1.0",
@@ -100,7 +101,7 @@ var helloMsgTestTable = []struct {
   </capabilities>
   <session-id>410</session-id>
 </hello>`),
-		msg: Hello{
+		msg: helloMessage{
 			XMLName: xml.Name{
 				Local: "hello",
 				Space: "urn:ietf:params:xml:ns:netconf:base:1.0",
@@ -127,7 +128,7 @@ var helloMsgTestTable = []struct {
 func TestUnmarshalHelloMsg(t *testing.T) {
 	for _, tc := range helloMsgTestTable {
 		t.Run(tc.name, func(t *testing.T) {
-			var got Hello
+			var got helloMessage
 			err := xml.Unmarshal(tc.raw, &got)
 			be.NilErr(t, err)
 			be.Equal(t, tc.msg.SessionID, got.SessionID)
@@ -216,43 +217,23 @@ var replyJunosGetConfigError = []byte(`
 </rpc-reply>
 `)
 
+// A reply decoded into a struct that embeds RPCReply gets the envelope.  The
+// errors of the reply are what parseReply returns, with all there is to them.
 func TestUnmarshalRPCReply(t *testing.T) {
-	tt := []struct {
-		name  string
-		reply []byte
-		want  any
-	}{
-		{
-			name:  "error",
-			reply: replyJunosGetConfigError,
-			want: RPCReply{
-				XMLName: xml.Name{
-					Local: "rpc-reply",
-					Space: "urn:ietf:params:xml:ns:netconf:base:1.0",
-				},
-				MessageID: "1",
-				RPCErrors: []RPCError{
-					{
-						Type:     ErrTypeProtocol,
-						Tag:      ErrOperationFailed,
-						Severity: SevError,
-						Message:  "syntax error, expecting <candidate/> or <running/>",
-						Info:     []byte("\n<bad-element>non-exist</bad-element>\n"),
-					},
-				},
-			},
-		},
-	}
+	var got RPCReply
+	be.NilErr(t, xml.Unmarshal(replyJunosGetConfigError, &got))
+	be.Equal(t, "1", got.MessageID)
+	be.Equal(t, xml.Name{Space: NetconfNamespace, Local: "rpc-reply"}, got.XMLName)
 
-	for _, tc := range tt {
-		t.Run(tc.name, func(t *testing.T) {
-			var got RPCReply
-			err := xml.Unmarshal(tc.reply, &got)
-			be.NilErr(t, err)
-			want := tc.want.(RPCReply)
-			be.Equal(t, want.MessageID, got.MessageID)
-			be.Equal(t, len(want.RPCErrors), len(got.RPCErrors))
-		})
-	}
+	_, err := parseReply(replyJunosGetConfigError)
+	var rpcErr RPCError
+	be.True(t, errors.As(err, &rpcErr))
+	be.Equal(t, ErrTypeProtocol, rpcErr.Type)
+	be.Equal(t, ErrOperationFailed, rpcErr.Tag)
+	be.Equal(t, SevError, rpcErr.Severity)
+	be.Equal(t, "syntax error, expecting <candidate/> or <running/>", rpcErr.Message)
 
+	bad, ok := rpcErr.Detail("bad-element")
+	be.True(t, ok)
+	be.Equal(t, "non-exist", bad)
 }

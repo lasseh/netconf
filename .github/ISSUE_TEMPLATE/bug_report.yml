@@ -1,0 +1,67 @@
+name: Bug report
+description: The library does something wrong, against a device or in your program
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem does not belong here. Report it in private, see [SECURITY.md](https://github.com/lasseh/netconf/blob/main/.github/SECURITY.md).
+
+        Everything in an issue is public. A device reply or a wire capture holds whole configurations: remove password hashes, keys, SNMP communities, serial numbers and addresses before you paste one.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead. Give errors as they were returned.
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code to reproduce
+      description: The smallest program or test that shows it.
+      render: go
+  - type: input
+    id: version
+    attributes:
+      label: Library version
+      description: The version of github.com/lasseh/netconf in your go.mod, or the commit.
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version
+      description: The output of `go version`.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Vendor, model and software version.
+      placeholder: Juniper EX4100, Junos 25.4R1
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - SSH with ncssh.DialHost
+        - SSH with ncssh.DialHost through a jump host
+        - SSH with ncssh.Dial or ncssh.NewTransport
+        - TLS
+        - A transport of my own
+  - type: textarea
+    id: exchange
+    attributes:
+      label: Operation and reply
+      description: |
+        When the problem is in what is sent or in how a reply is read: the operation as sent and the reply as received. `Reply.Raw` is the reply, and `DebugCapture` on the transport copies the whole exchange, secrets included.
+      render: xml
+  - type: checkboxes
+    id: scrubbed
+    attributes:
+      label: Before you submit
+      options:
+        - label: Nothing I pasted contains password hashes, keys, community strings, serial numbers or addresses that should stay private.
+          required: true

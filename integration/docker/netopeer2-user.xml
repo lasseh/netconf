@@ -1,0 +1,47 @@
+<!--
+  The users the integration suite logs in as, merged into the listen
+  configuration that installing netopeer2 creates.
+
+  netconf has a password; one that starts with $0$ is in clear text.
+
+  netconf-key has a key, for the run of the suite over the ssh of the
+  system, which has no way to type a password.  The key is that of a pair
+  made when the image is built: the build puts its public half in the place
+  of PUBLIC_KEY.  It is a user of its own because netopeer2 wants every
+  method a user has, a password and a key, and not one of them.
+-->
+<netconf-server xmlns="urn:ietf:params:xml:ns:yang:ietf-netconf-server">
+  <listen>
+    <endpoints>
+      <endpoint>
+        <name>default-ssh</name>
+        <ssh>
+          <ssh-server-parameters>
+            <client-authentication>
+              <users>
+                <user>
+                  <name>netconf</name>
+                  <password>
+                    <hashed-password>$0$netconf</hashed-password>
+                  </password>
+                </user>
+                <user>
+                  <name>netconf-key</name>
+                  <public-keys>
+                    <inline-definition>
+                      <public-key>
+                        <name>integration</name>
+                        <public-key-format xmlns:ct="urn:ietf:params:xml:ns:yang:ietf-crypto-types">ct:ssh-public-key-format</public-key-format>
+                        <public-key>PUBLIC_KEY</public-key>
+                      </public-key>
+                    </inline-definition>
+                  </public-keys>
+                </user>
+              </users>
+            </client-authentication>
+          </ssh-server-parameters>
+        </ssh>
+      </endpoint>
+    </endpoints>
+  </listen>
+</netconf-server>

@@ -1,0 +1,12 @@
+name: Question
+description: How to do something with the library
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: |
+        What you want to do, what you tried and the device it is for. Issues are public: remove secrets from device output before you paste it.
+    validations:
+      required: true

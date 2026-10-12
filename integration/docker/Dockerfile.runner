@@ -1,0 +1,20 @@
+FROM golang:latest AS base
+WORKDIR /src
+COPY go.mod go.sum /src/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download -x
+
+FROM base AS runner
+RUN apt-get update && apt-get install -y \
+    openssh-client \
+    sshpass \
+    libxml-xpath-perl
+RUN --mount=target=/src \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir /out && \
+    cd integration && \
+    go test -tags=integration -c -o /out/integration.test
+WORKDIR /out
+COPY integration/docker/wait-for-hello.sh .
+CMD ["./integration.test", "-test.v"]

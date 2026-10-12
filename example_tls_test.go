@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"nemith.io/netconf"
-	"nemith.io/netconf/rpc"
-	nctls "nemith.io/netconf/transport/tls"
+	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/rpc"
+	nctls "github.com/lasseh/netconf/transport/tls"
 )
 
 const tlsAddr = "myrouter.example.com:6513"
@@ -42,30 +42,29 @@ func Example_tls() {
 	}
 
 	// tls transport configuration
+	// The server certificate is verified against the CA for the host name
+	// being dialed.
 	config := tls.Config{
-		InsecureSkipVerify: true,
-		RootCAs:            caCertPool,
-		Certificates:       []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
 	}
 
-	// Add a connection establish timeout of 5 seconds.  You can also accomplish
-	// the same behavior with Timeout field of the ssh.ClientConfig.
+	// Five seconds to connect and open the session.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	transport, err := nctls.Dial(ctx, "tcp", tlsAddr, &config)
 	if err != nil {
 		panic(err)
 	}
-	defer transport.Close() // nolint:errcheck
 
-	session, err := netconf.NewSession(transport)
+	session, err := netconf.Open(ctx, transport)
 	if err != nil {
 		panic(err)
 	}
-	defer session.Close(context.Background()) // nolint:errcheck
 
 	// timeout for the call itself.
-	ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cfg, err := rpc.GetConfig{Source: rpc.Running}.Exec(ctx, session)

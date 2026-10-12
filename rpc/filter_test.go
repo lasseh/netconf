@@ -7,10 +7,10 @@ import (
 	"github.com/carlmjohnson/be"
 )
 
-// Helper struct for testing struct marshaling
+// Helper struct for testing struct marshaling.
 type InterfaceFilter struct {
 	XMLName xml.Name `xml:"interfaces"`
-	Name    string   `xml:"interfaces>interface>name,omitempty"`
+	Name    string   `xml:"interface>name,omitempty"`
 }
 
 func TestSubtreeFilter_MarshalXML(t *testing.T) {
@@ -49,6 +49,16 @@ func TestSubtreeFilter_MarshalXML(t *testing.T) {
 			be.Equal(t, tt.expected, string(out))
 		})
 	}
+}
+
+func TestXPathFilter_MarshalXML_InvalidPrefix(t *testing.T) {
+	wrapper := struct {
+		XMLName xml.Name `xml:"root"`
+		F       Filter   `xml:"filter"`
+	}{F: XPathFilter("/a:b", map[string]string{`p="u" foo`: "urn:example"})}
+
+	_, err := xml.Marshal(&wrapper)
+	be.Nonzero(t, err)
 }
 
 func TestXPathFilter_MarshalXML(t *testing.T) {

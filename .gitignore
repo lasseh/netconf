@@ -1,6 +1,33 @@
-.idea/
-confd-basic*.zip
-out
-cover.out
-coverage.out
+# Go: test binaries, coverage, profiles, a workspace of your own
 *.test
+*.out
+*.prof
+/coverage.html
+/go.work
+/go.work.sum
+
+# A run with NETCONF_DUT_TRACE logs whole configurations, secrets included
+*.log
+
+# Credentials: environment files and keys
+.env*
+*.pem
+*.key
+
+# The ConfD download for the integration suite, see integration/README.md
+confd-basic*.zip
+
+# The modules of Juniper that `make junos-schema` fetches
+/.juniper-yang/
+
+# Editors and the operating system
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local working files: tickets, prompts, agent settings
+/.scratch/
+/prompts/
+.claude/settings.local.json

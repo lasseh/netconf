@@ -1,0 +1,23 @@
+name: Feature request
+description: Something the library should do and does not
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: What are you trying to do
+      description: The task, and what stands in the way with the library as it is.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: How you would like to write it, as code if you can.
+      render: go
+  - type: input
+    id: devices
+    attributes:
+      label: Devices
+      description: Vendor and software versions it matters for, when it is about how a device behaves.
+      placeholder: Junos 23.4 and later

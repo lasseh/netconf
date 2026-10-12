@@ -1,0 +1,27 @@
+name: Junos Schema
+
+# What a Junos release declares changes when Juniper publishes its YANG, not
+# with a commit here, so this runs by the week and not with every push.
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - internal/cmd/junosschema/**
+      - Makefile
+      - .github/workflows/junos-schema.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  junos-schema:
+    name: Junos Schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: make junos-schema

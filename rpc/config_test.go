@@ -2,9 +2,14 @@ package rpc
 
 import (
 	"encoding/xml"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/carlmjohnson/be"
+
+	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/internal/netconftest"
 )
 
 func TestMarshalDatastore(t *testing.T) {
@@ -19,6 +24,10 @@ func TestMarshalDatastore(t *testing.T) {
 		{Datastore("custom-store"), "<rpc><target><custom-store/></target></rpc>", false},
 		{Datastore(""), "", true},
 		{Datastore("<xml-elements>"), "", true},
+		{Datastore("9store"), "", true},
+		{Datastore("-x"), "", true},
+		{Datastore("_x"), "<rpc><target><_x/></target></rpc>", false},
+		{Datastore("x9"), "<rpc><target><x9/></target></rpc>", false},
 	}
 
 	for _, tc := range tt {
@@ -97,7 +106,7 @@ func TestGetConfig_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		got, err := tc.op.Exec(t.Context(), session)
 		be.NilErr(t, err)
 		expected := `<top xmlns="http://example.com/schema/1.2/config"><users><user><name>root</name></user></users></top>`
@@ -183,7 +192,7 @@ func TestEditConfig_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -246,7 +255,7 @@ func TestCopyConfig_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -298,7 +307,7 @@ func TestDeleteConfig_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -351,7 +360,7 @@ func TestLock_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -404,7 +413,7 @@ func TestUnlock_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -425,7 +434,7 @@ func TestPartialLock_MarshalXML(t *testing.T) {
 			op: PartialLock{
 				Select: []string{"/interfaces/interface[name='eth0']"},
 			},
-			expected: `<partial-lock xmlns="urn:ietf:params:xml:ns:netconf:partial-lock:1.0"><select>/interfaces/interface[name='eth0']</select></partial-lock>`,
+			expected: `<partial-lock xmlns="urn:ietf:params:xml:ns:netconf:partial-lock:1.0"><select>/interfaces/interface[name=&#39;eth0&#39;]</select></partial-lock>`,
 		},
 		{
 			name: "multipleSelect",
@@ -435,7 +444,7 @@ func TestPartialLock_MarshalXML(t *testing.T) {
 					"/interfaces/interface[name='eth1']",
 				},
 			},
-			expected: `<partial-lock xmlns="urn:ietf:params:xml:ns:netconf:partial-lock:1.0"><select>/interfaces/interface[name='eth0']</select><select>/interfaces/interface[name='eth1']</select></partial-lock>`,
+			expected: `<partial-lock xmlns="urn:ietf:params:xml:ns:netconf:partial-lock:1.0"><select>/interfaces/interface[name=&#39;eth0&#39;]</select><select>/interfaces/interface[name=&#39;eth1&#39;]</select></partial-lock>`,
 		},
 	}
 	for _, tt := range tests {
@@ -468,7 +477,7 @@ func TestPartialLock_Exec(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			session, _ := mockSession(t, tc.serverReply)
+			session := mockSession(t, tc.serverReply)
 			reply, err := tc.op.Exec(t.Context(), session)
 			if tc.shouldError {
 				be.Nonzero(t, err)
@@ -521,7 +530,7 @@ func TestPartialUnlock_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -574,7 +583,7 @@ func TestValidate_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -599,19 +608,41 @@ func TestCommit_MarshalXML(t *testing.T) {
 			name: "confirmed",
 			op: Commit{
 				Confirmed:      true,
-				ConfirmTimeout: 300,
+				ConfirmTimeout: 300 * time.Second,
 			},
 			expected: `<commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><confirmed></confirmed><confirm-timeout>300</confirm-timeout></commit>`,
 		},
 		{
+			// the first confirmed commit sets the token
 			name: "confirmedPersist",
 			op: Commit{
 				Confirmed: true,
-				PersistID: "foobar",
+				Persist:   "foobar",
 			},
 			expected: `<commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><confirmed></confirmed><persist>foobar</persist></commit>`,
 		},
 		{
+			// a further confirmed commit names it, and has more time
+			name: "extendPersistID",
+			op: Commit{
+				Confirmed:      true,
+				ConfirmTimeout: 300 * time.Second,
+				PersistID:      "foobar",
+			},
+			expected: `<commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><confirmed></confirmed><confirm-timeout>300</confirm-timeout><persist-id>foobar</persist-id></commit>`,
+		},
+		{
+			// and may set a new one
+			name: "extendPersistIDNewToken",
+			op: Commit{
+				Confirmed: true,
+				Persist:   "foobar2",
+				PersistID: "foobar",
+			},
+			expected: `<commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><confirmed></confirmed><persist>foobar2</persist><persist-id>foobar</persist-id></commit>`,
+		},
+		{
+			// the confirmation names it
 			name: "confirmPersistID",
 			op: Commit{
 				PersistID: "foobar2",
@@ -630,6 +661,37 @@ func TestCommit_MarshalXML(t *testing.T) {
 	}
 }
 
+// A token for a commit that is not a confirmed one is a mistake of the
+// caller, and nothing is sent for it.
+func TestCommit_PersistNeedsConfirmed(t *testing.T) {
+	const hello = `<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability></capabilities><session-id>42</session-id></hello>`
+
+	var mu sync.Mutex
+	var requests []string
+	tr := netconftest.NewTransport(t, netconftest.Hello(hello, func(req string) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		requests = append(requests, req)
+		return []string{`<rpc-reply message-id="` + netconftest.ExtractMessageID(req) + `" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><ok/></rpc-reply>`}
+	}))
+	session, err := netconf.Open(t.Context(), tr)
+	be.NilErr(t, err)
+
+	_, err = xml.Marshal(Commit{Persist: "token"})
+	be.Nonzero(t, err)
+
+	err = Commit{Persist: "token"}.Exec(t.Context(), session)
+	be.Nonzero(t, err)
+	be.In(t, "commit: persist requires Confirmed to be set", err.Error())
+
+	// the session is as good as before, and the device saw this one only
+	be.NilErr(t, Commit{PersistID: "token"}.Exec(t.Context(), session))
+	mu.Lock()
+	defer mu.Unlock()
+	be.Equal(t, 1, len(requests))
+	be.In(t, "<persist-id>token</persist-id>", requests[0])
+}
+
 func TestCommit_Exec(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -641,7 +703,7 @@ func TestCommit_Exec(t *testing.T) {
 			name: "okReply",
 			op: Commit{
 				Confirmed:      true,
-				ConfirmTimeout: 200,
+				ConfirmTimeout: 200 * time.Second,
 			},
 			serverReply: `<ok/>`,
 			shouldError: false,
@@ -649,7 +711,7 @@ func TestCommit_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -705,7 +767,7 @@ func TestCancelCommit_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -754,7 +816,7 @@ func TestDiscardChanges_Exec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		session, _ := mockSession(t, tc.serverReply)
+		session := mockSession(t, tc.serverReply)
 		err := tc.op.Exec(t.Context(), session)
 		if tc.shouldError {
 			be.Nonzero(t, err)
@@ -762,4 +824,138 @@ func TestDiscardChanges_Exec(t *testing.T) {
 			be.NilErr(t, err)
 		}
 	}
+}
+
+func TestPartialLock_MarshalXML_Escaping(t *testing.T) {
+	const expr = "/if:interface[if:mtu < 1500 and x='a&b']"
+
+	out, err := xml.Marshal(PartialLock{Select: []string{expr}})
+	be.NilErr(t, err)
+
+	// The XPath must be escaped as chardata, not injected as raw XML.
+	be.In(t, "&lt;", string(out))
+	be.In(t, "&amp;", string(out))
+
+	// And it must round-trip back to the original expression.
+	var parsed struct {
+		Select []string `xml:"select"`
+	}
+	be.NilErr(t, xml.Unmarshal(out, &parsed))
+	be.Equal(t, 1, len(parsed.Select))
+	be.Equal(t, expr, parsed.Select[0])
+}
+
+func TestCopyConfig_MarshalXML_Errors(t *testing.T) {
+	// Zero-value copy-config has no source/target and must error.
+	_, err := xml.Marshal(CopyConfig{})
+	be.Nonzero(t, err)
+}
+
+func TestCopyConfig_MarshalXML_InlineSource(t *testing.T) {
+	out, err := xml.Marshal(CopyConfig{
+		Source: Config{Payload: `<interface><name>eth0</name></interface>`},
+		Target: Running,
+	})
+	be.NilErr(t, err)
+
+	expected := `<copy-config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><source><config><interface><name>eth0</name></interface></config></source><target><running/></target></copy-config>`
+	be.Equal(t, expected, string(out))
+}
+
+func TestCopyConfig_MarshalXML_InlineSourceBytes(t *testing.T) {
+	out, err := xml.Marshal(CopyConfig{
+		Source: Config{Payload: []byte(`<interface><name>eth0</name></interface>`)},
+		Target: Running,
+	})
+	be.NilErr(t, err)
+
+	expected := `<copy-config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><source><config><interface><name>eth0</name></interface></config></source><target><running/></target></copy-config>`
+	be.Equal(t, expected, string(out))
+}
+
+func TestCopyConfig_MarshalXML_InlineSourceStruct(t *testing.T) {
+	type iface struct {
+		XMLName xml.Name `xml:"interface"`
+		Name    string   `xml:"name"`
+	}
+
+	out, err := xml.Marshal(CopyConfig{
+		Source: Config{Payload: iface{Name: "eth0"}},
+		Target: Running,
+	})
+	be.NilErr(t, err)
+
+	expected := `<copy-config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><source><config><interface><name>eth0</name></interface></config></source><target><running/></target></copy-config>`
+	be.Equal(t, expected, string(out))
+}
+
+func TestValidate_MarshalXML_Errors(t *testing.T) {
+	// Zero-value validate has no source and must error.
+	_, err := xml.Marshal(Validate{})
+	be.Nonzero(t, err)
+}
+
+func TestValidate_MarshalXML_InlineSource(t *testing.T) {
+	out, err := xml.Marshal(Validate{
+		Source: Config{Payload: `<interface><name>eth0</name></interface>`},
+	})
+	be.NilErr(t, err)
+
+	expected := `<validate xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><source><config><interface><name>eth0</name></interface></config></source></validate>`
+	be.Equal(t, expected, string(out))
+}
+
+func TestCommit_MarshalXML_ConfirmTimeout(t *testing.T) {
+	// ConfirmTimeout without Confirmed emits an invalid RPC and must error.
+	_, err := xml.Marshal(Commit{ConfirmTimeout: 5 * time.Minute})
+	be.Nonzero(t, err)
+
+	// Confirmed + ConfirmTimeout is valid.
+	out, err := xml.Marshal(Commit{Confirmed: true, ConfirmTimeout: 5 * time.Minute})
+	be.NilErr(t, err)
+	be.In(t, "<confirmed></confirmed>", string(out))
+	be.In(t, "<confirm-timeout>300</confirm-timeout>", string(out))
+
+	// The protocol counts whole seconds; a part of one is rounded up.
+	out, err = xml.Marshal(Commit{Confirmed: true, ConfirmTimeout: 1500 * time.Millisecond})
+	be.NilErr(t, err)
+	be.In(t, "<confirm-timeout>2</confirm-timeout>", string(out))
+
+	_, err = xml.Marshal(Commit{Confirmed: true, ConfirmTimeout: -time.Second})
+	be.Nonzero(t, err)
+}
+
+func TestEditConfig_MarshalXML_StructConfig(t *testing.T) {
+	type configuration struct {
+		XMLName  xml.Name `xml:"configuration"`
+		Hostname string   `xml:"system>host-name"`
+	}
+
+	out, err := xml.Marshal(EditConfig{
+		Target: Candidate,
+		Config: configuration{Hostname: "switch1"},
+	})
+	be.NilErr(t, err)
+
+	expected := `<edit-config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><target><candidate/></target><config><configuration><system><host-name>switch1</host-name></system></configuration></config></edit-config>`
+	be.Equal(t, expected, string(out))
+}
+
+func TestEditConfig_MarshalXML_NilConfig(t *testing.T) {
+	_, err := xml.Marshal(EditConfig{Target: Candidate})
+	be.Nonzero(t, err)
+}
+
+// Junos (25.4, without rfc-compliant) answers <validate> with the commit
+// check results next to <ok/>.
+func TestValidate_JunosReply(t *testing.T) {
+	session := mockSession(t, `<commit-results>
+<routing-engine junos:style="normal" xmlns:junos="http://xml.juniper.net/junos/25.4R1-S1.7/junos">
+<name>fpc0</name>
+<commit-check-success/>
+</routing-engine>
+</commit-results>
+<ok/>`)
+
+	be.NilErr(t, Validate{Source: Candidate}.Exec(t.Context(), session))
 }

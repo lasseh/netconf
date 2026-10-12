@@ -1,0 +1,8 @@
+<!--
+  Access control is switched off in this server: the integration suite
+  writes to it, and the access control model lets nobody but the recovery
+  user write what the suite writes.  It is a server for tests.
+-->
+<nacm xmlns="urn:ietf:params:xml:ns:yang:ietf-netconf-acm">
+  <enable-nacm>false</enable-nacm>
+</nacm>

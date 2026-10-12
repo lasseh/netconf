@@ -1,0 +1,200 @@
+<!-- No zombies were killed during the creation of this user interface -->
+<!-- user operator, class j-super-user -->
+<nc:hello xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+   <nc:capabilities>
+    <nc:capability>urn:ietf:params:netconf:base:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:base:1.1</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:candidate:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:confirmed-commit:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:validate:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:url:1.0?scheme=http,ftp,file</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:base:1.1?module=ietf-netconf&amp;revision=2011-06-01</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:capability:candidate:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:capability:confirmed-commit:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:capability:validate:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:capability:url:1.0?scheme=http,ftp,file</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:yang:ietf-inet-types?module=ietf-inet-types&amp;revision=2013-07-15</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:yang:ietf-yang-metadata?module=ietf-yang-metadata&amp;revision=2016-08-05</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring</nc:capability>
+    <nc:capability>http://xml.juniper.net/netconf/junos/1.0</nc:capability>
+    <nc:capability>http://xml.juniper.net/dmi/system/1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:notification:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netconf:notification:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:netconf:capability:interleave:1.0</nc:capability>
+    <nc:capability>urn:ietf:params:xml:ns:netmod:notification</nc:capability>
+    <nc:capability>http://yang.juniper.net/junos/jcmd?module=junos-configuration-metadata&amp;revision=2021-09-01</nc:capability>
+  </nc:capabilities>
+  <nc:session-id>46687</nc:session-id>
+</nc:hello>
+]]>]]>
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="1">
+
+#9
+<nc:ok/>
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="2">
+
+#9
+<nc:ok/>
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="3">
+
+#15
+<nc:rpc-error>
+
+#40
+<nc:error-type>protocol</nc:error-type>
+
+#46
+<nc:error-tag>operation-failed</nc:error-tag>
+
+#45
+<nc:error-severity>error</nc:error-severity>
+
+#50
+<nc:error-message>syntax error</nc:error-message>
+
+#16
+<nc:error-info>
+
+#45
+<nc:bad-element>no-such-rpc</nc:bad-element>
+
+#17
+</nc:error-info>
+
+#16
+</nc:rpc-error>
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="4">
+
+#17
+<commit-results>
+
+#15
+<nc:rpc-error>
+
+#47
+<nc:error-severity>warning</nc:error-severity>
+
+#19
+<nc:error-message>
+
+#55
+'synchronize' ignored in single routing engine chassis
+
+#20
+</nc:error-message>
+
+#16
+</nc:rpc-error>
+
+#18
+</commit-results>
+
+#9
+<nc:ok/>
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="5">
+
+#15
+<nc:rpc-error>
+
+#168
+<nc:error-severity>warning</nc:error-severity>
+<nc:error-message>
+changes cannot be committed while 'configure exclusive' is active
+</nc:error-message>
+</nc:rpc-error>
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="6">
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="7">
+
+#15
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="8">
+
+#56
+<load-configuration-results action="set" format="text">
+
+#15
+<nc:rpc-error>
+
+#176
+<nc:error-severity>warning</nc:error-severity>
+<nc:error-message>
+statement not found
+</nc:error-message>
+</nc:rpc-error>
+<nc:ok/>
+</load-configuration-results>
+</nc:rpc-reply>
+##
+
+#139
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="9">
+
+#42
+<load-configuration-results rollback="0">
+
+#9
+<nc:ok/>
+
+#30
+</load-configuration-results>
+
+#15
+</nc:rpc-reply>
+##
+
+#140
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="10">
+
+#15
+</nc:rpc-reply>
+##
+
+#140
+<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/26.2R1.7/junos" message-id="11">
+
+#9
+<nc:ok/>
+
+#15
+</nc:rpc-reply>
+##

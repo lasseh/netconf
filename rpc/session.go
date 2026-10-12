@@ -3,37 +3,33 @@ package rpc
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
-	"nemith.io/netconf"
+	"github.com/lasseh/netconf"
 )
 
-// KillSessionReq represents the `<kill-session>` operation defined in
-// [RFC6241 7.6] for terminating a NETCONF session.
+// KillSession represents the `<kill-session>` operation defined in
+// [RFC6241 7.9] for terminating another NETCONF session.
 //
-// [RFC6241 7.6]: https://www.rfc-editor.org/rfc/rfc6241.html#section-7.6
+// [RFC6241 7.9]: https://www.rfc-editor.org/rfc/rfc6241.html#section-7.9
 type KillSession struct {
-	SessionID uint
+	// SessionID is the session to end: another session's
+	// netconf.Session.SessionID, or one found in the server's session list.
+	SessionID uint64
 }
 
-func (rpc *KillSession) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+// MarshalXML implements xml.Marshaler.
+func (rpc KillSession) MarshalXML(e *xml.Encoder, _ xml.StartElement) error {
 	req := struct {
 		XMLName   xml.Name `xml:"urn:ietf:params:xml:ns:netconf:base:1.0 kill-session"`
-		SessionID uint     `xml:"session-id"`
+		SessionID uint64   `xml:"session-id"`
 	}{
 		SessionID: rpc.SessionID,
 	}
-	return e.EncodeElement(&req, start)
+	return e.Encode(&req)
 }
 
-func (rpc *KillSession) Exec(ctx context.Context, session *netconf.Session) error {
-	var resp OkReply
-	if err := session.Exec(ctx, rpc, &resp); err != nil {
-		return err
-	}
-
-	if !resp.OK {
-		return fmt.Errorf("kill-session: operation failed, <ok> not received")
-	}
-	return nil
+// Exec issues the operation on session.  It fails unless the server answers
+// with <ok/>.
+func (rpc KillSession) Exec(ctx context.Context, session *netconf.Session) error {
+	return ExecOK(ctx, session, rpc, "kill-session")
 }
