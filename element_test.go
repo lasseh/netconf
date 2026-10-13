@@ -3,6 +3,8 @@ package netconf
 import (
 	"encoding/xml"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -376,6 +378,19 @@ func TestElementDecodeNamespaces(t *testing.T) {
 		be.Nonzero(t, found[1].Decode(&inner))
 	})
 
+	// as encoding/xml reads an element that declares a prefix twice
+	t.Run("the last of two declarations on one element counts", func(t *testing.T) {
+		reply := &Reply{Raw: []byte(`<rpc-reply><a xmlns:p="urn:first" xmlns:p="urn:last"><c p:x="1">2</c></a></rpc-reply>`)}
+		el, err := reply.Element("c")
+		be.NilErr(t, err)
+
+		var got struct {
+			X int `xml:"urn:last x,attr"`
+		}
+		be.NilErr(t, el.Decode(&got))
+		be.Equal(t, 1, got.X)
+	})
+
 	// what the element declares itself has the last word
 	t.Run("the element's own declaration", func(t *testing.T) {
 		el, err := (&Reply{Raw: []byte(junosConfigurationReply)}).Element("configuration")
@@ -464,4 +479,33 @@ func TestElementsShareNamespaces(t *testing.T) {
 	be.Equal(t, 3, len(found))
 	be.True(t, found[0].ns != nil)
 	be.True(t, found[0].ns == found[1].ns && found[1].ns == found[2].ns)
+}
+
+// A device can declare as many prefixes around an element as fit in a
+// message.  Decode puts them back, and what that costs grows with their
+// number, not with its square.
+func BenchmarkElementDecodeNamespaces(b *testing.B) {
+	for _, prefixes := range []int{1000, 10000, 100000} {
+		b.Run(strconv.Itoa(prefixes), func(b *testing.B) {
+			var raw strings.Builder
+			raw.WriteString(`<rpc-reply><a`)
+			for i := range prefixes {
+				fmt.Fprintf(&raw, ` xmlns:p%d="urn:p"`, i)
+			}
+			raw.WriteString(`><x>1</x></a></rpc-reply>`)
+
+			el, err := (&Reply{Raw: []byte(raw.String())}).Element("x")
+			if err != nil {
+				b.Fatal(err)
+			}
+			var got struct {
+				X int `xml:",chardata"`
+			}
+			for b.Loop() {
+				if err := el.Decode(&got); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
