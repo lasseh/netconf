@@ -29,7 +29,8 @@ the other targets.
 
 The targets need the current Go release and
 [golangci-lint](https://golangci-lint.run) v2, `make vulncheck` needs
-[govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) and
+[govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck),
+`make actionlint` [actionlint](https://github.com/rhysd/actionlint) and
 `make integration-netopeer2` Docker. `make test` uses
 [gotestsum](https://github.com/gotestyourself/gotestsum) when it is
 installed.
@@ -37,9 +38,10 @@ installed.
 ## Pull requests
 
 - One logical change per pull request.
-- CI runs the lint, the unit tests, the vulnerability scan and the
-  integration suite against netopeer2, for every pull request and once a
-  week. `make junos-schema` runs once a week, and for a change to
+- CI runs the lint, the unit tests, the vulnerability scan, the lint of
+  the workflows (`make actionlint`) and the integration suite against
+  netopeer2, for every pull request and once a week. `make junos-schema`
+  runs once a week, and for a change to
   `internal/cmd/junosschema`, to the Makefile or to its workflow.
 - `make fuzz` runs every night with five minutes for each target, and
   starts from what the nights before found. A run that fails keeps the

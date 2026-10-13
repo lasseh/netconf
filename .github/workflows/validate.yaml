@@ -28,6 +28,17 @@ jobs:
           install-only: true
       - run: make lint
 
+  actionlint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+      - run: make actionlint
+
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
