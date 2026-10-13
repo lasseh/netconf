@@ -302,7 +302,8 @@ First release line of the fork of `nemith.io/netconf` at commit `e745332`.
   is sent; previously the device received an empty or truncated frame.
 - Rpc attribute names are validated (they were written verbatim).
 - Frames without an XML element are skipped instead of ending the session;
-  an rpc-reply without message-id answers the only outstanding operation.
+  an rpc-reply without message-id answers the only operation that was
+  sent and has no reply yet.
 - Notifications queued when the session closes are dropped, not delivered
   late.
 - A failed write ends the session and reports `ErrClosed` like every other

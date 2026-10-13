@@ -54,14 +54,32 @@ func TestReplyTable(t *testing.T) {
 		table := newReplyTable()
 		a := newReq()
 		be.NilErr(t, table.register("1", a, false))
+		table.markSent(a)
 		be.True(t, resolved(table, "") == a)
 	})
 
 	t.Run("reply without message-id is ambiguous with two operations", func(t *testing.T) {
 		table := newReplyTable()
-		be.NilErr(t, table.register("1", newReq(), false))
-		be.NilErr(t, table.register("2", newReq(), false))
+		a, b := newReq(), newReq()
+		be.NilErr(t, table.register("1", a, false))
+		be.NilErr(t, table.register("2", b, false))
+		table.markSent(a)
+		table.markSent(b)
 		be.True(t, resolved(table, "") == nil)
+	})
+
+	// The server has seen nothing of an operation that waits to be sent, so
+	// it is not what a reply without message-id answers.
+	t.Run("reply without message-id answers the operation that was sent", func(t *testing.T) {
+		table := newReplyTable()
+		a, b := newReq(), newReq()
+		be.NilErr(t, table.register("1", a, false))
+		be.NilErr(t, table.register("2", b, false))
+		be.True(t, resolved(table, "") == nil) // neither was sent
+
+		table.markSent(a)
+		be.True(t, resolved(table, "") == a)
+		be.True(t, resolved(table, "") == nil) // b still waits to be sent
 	})
 
 	t.Run("reply without message-id may belong to an abandoned operation", func(t *testing.T) {
@@ -75,6 +93,7 @@ func TestReplyTable(t *testing.T) {
 
 		b := newReq()
 		be.NilErr(t, table.register("2", b, false))
+		table.markSent(b)
 		be.True(t, resolved(table, "") == nil) // A's late, id-less error
 
 		// With A accounted for, an id-less reply can only be B's.
@@ -89,6 +108,7 @@ func TestReplyTable(t *testing.T) {
 
 		b := newReq()
 		be.NilErr(t, table.register("2", b, false))
+		table.markSent(b)
 		be.True(t, resolved(table, "") == b)
 	})
 
@@ -130,6 +150,7 @@ func TestReplyTable(t *testing.T) {
 
 			b := newReq()
 			be.NilErr(t, table.register("2", b, false))
+			table.markSent(b)
 			be.True(t, resolved(table, "") == b)
 		}
 	})
