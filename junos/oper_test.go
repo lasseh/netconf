@@ -217,6 +217,33 @@ func TestDecode(t *testing.T) {
 		be.Equal(t, "", got[0].hidden)
 	})
 
+	// The strings are trimmed where encoding/xml decodes.  What else the
+	// value holds is the caller's, and may point back at the value.
+	t.Run("into a value that holds something already", func(t *testing.T) {
+		type described struct {
+			Description string `xml:"description"`
+		}
+		type node struct {
+			described
+			Name   string `xml:"name"`
+			Note   string `xml:"-"`
+			Parent *node  `xml:"-"`
+			Next   *node  `xml:"next"`
+			hidden *node
+		}
+		reply := &netconf.Reply{Raw: []byte("<rpc-reply><node><name>\nge-0/0/0\n</name><description>\nuplink\n</description></node></rpc-reply>")}
+
+		got := node{Note: " mine ", hidden: &node{Name: " mine too "}}
+		got.Parent = &got
+		got.Next = &got
+		be.NilErr(t, junos.Decode(reply, "node", &got))
+
+		be.Equal(t, "ge-0/0/0", got.Name)
+		be.Equal(t, "uplink", got.Description)
+		be.Equal(t, " mine ", got.Note)
+		be.Equal(t, " mine too ", got.hidden.Name)
+	})
+
 	t.Run("per routing engine", func(t *testing.T) {
 		sess, _ := session(t, uptimeWrapped)
 		reply, err := sess.ExecReply(context.Background(), "<get-system-uptime-information/>")
