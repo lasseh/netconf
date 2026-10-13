@@ -566,6 +566,7 @@ func TestMessageTimeout(t *testing.T) {
 		return
 	}
 	_, config := probe()
+	probeAbsent(testCtx(t), t, session)
 	t.Cleanup(func() {
 		measure("commit that takes the group out", func(ctx context.Context) error {
 			_, err := junos.Change{Format: junos.FormatSet, Config: "delete groups " + probeGroup}.Apply(ctx, session)
@@ -1332,13 +1333,16 @@ func TestJunosLoadPatchURLRescue(t *testing.T) {
 // The tests from here to TestJunosErrorDetail commit, and only run when
 // asked for.  What they commit is a configuration group that nothing
 // applies, and they take it out again: the device runs the same as before,
-// with a longer commit history.  They are meant for a lab device.
+// with a longer commit history.  They are meant for a lab device.  A group
+// of that name that the device runs already is not theirs, and they fail
+// without touching it, see probeAbsent.
 
 // probeGroup is the configuration group these tests work with.
 const probeGroup = "netconf-lib-probe"
 
 // commitSession returns a session for a test that commits.  The probe group
-// is taken out of the configuration when the test is over.
+// must not be there when the test begins, and is taken out of the
+// configuration when the test is over.
 func commitSession(t *testing.T) *netconf.Session {
 	t.Helper()
 	onlyFlavor(t, "junos")
@@ -1347,6 +1351,7 @@ func commitSession(t *testing.T) *netconf.Session {
 	}
 
 	session := setupSSH(t)
+	probeAbsent(testCtx(t), t, session)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
@@ -1864,6 +1869,11 @@ func TestJunosEphemeral(t *testing.T) {
 	latest := commits(ctx, t, other)[0]
 
 	be.NilErr(t, junos.OpenConfiguration{Ephemeral: true}.Exec(ctx, session))
+	// a list of that name that is there already is not the test's to take out
+	if before := read(t, session, true); before != "" {
+		be.NilErr(t, junos.CloseConfiguration{}.Exec(ctx, session))
+		t.Fatalf("the ephemeral database has a prefix list named %q that this test did not make: %s", probeGroup, before)
+	}
 	defer func() {
 		// whatever became of the test, the list does not stay in the database
 		_, err := junos.LoadConfiguration{Format: junos.FormatSet, Config: "delete " + list}.Exec(ctx, session)

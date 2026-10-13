@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,28 @@ func harmless(t *testing.T) harmlessConfig {
 	}
 	t.Skip("no harmless configuration to write for this flavor, skipping test")
 	return harmlessConfig{}
+}
+
+// probeAbsent fails a test that is about to commit when the device already
+// runs configuration in the place the tests write to.  The test did not make
+// it, and would change it and then take it out.  A run that was cut short
+// leaves the same behind, which is for a person to take out: the test cannot
+// tell the two apart.
+func probeAbsent(ctx context.Context, t *testing.T, session *netconf.Session) {
+	t.Helper()
+
+	var there bool
+	if os.Getenv("NETCONF_DUT_FLAVOR") == "junos" {
+		there = strings.TrimSpace(activeProbe(ctx, t, session)) != ""
+	} else {
+		data, err := rpc.GetConfig{Source: rpc.Running, Filter: rpc.SubtreeFilter(harmless(t).filter)}.Exec(ctx, session)
+		be.NilErr(t, err)
+		there = bytes.Contains(data, []byte(probeGroup))
+	}
+	if there {
+		t.Fatalf("the device runs configuration named %q that this test did not make, and the test would change it and take it out; "+
+			"if a run that was cut short left it, take it out by hand (on Junos: delete groups %s)", probeGroup, probeGroup)
+	}
 }
 
 // mayLoad skips the test unless the device may be loaded into, and mayCommit
@@ -165,6 +188,9 @@ func TestEditConfigCandidate(t *testing.T) {
 	}
 	ctx := changeCtx(t)
 	value := "std-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if mayCommit() {
+		probeAbsent(ctx, t, session)
+	}
 
 	be.NilErr(t, rpc.Lock{Target: rpc.Candidate}.Exec(ctx, session))
 	defer func() {
@@ -244,6 +270,7 @@ func TestCommitPersist(t *testing.T) {
 	ctx := changeCtx(t)
 	value := "std-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	kept, cancelled := value+"-kept", value+"-cancelled"
+	probeAbsent(ctx, t, first)
 
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -336,6 +363,7 @@ func TestEditConfigRunning(t *testing.T) {
 	}
 	ctx := changeCtx(t)
 	value := "std-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	probeAbsent(ctx, t, session)
 
 	be.NilErr(t, rpc.EditConfig{Target: rpc.Running, Config: cfg.config(value)}.Exec(ctx, session))
 	defer func() {
@@ -376,6 +404,7 @@ func TestCopyConfigStartup(t *testing.T) {
 	ctx := changeCtx(t)
 	value := "std-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	toStartup := rpc.CopyConfig{Source: rpc.Running, Target: rpc.Startup}
+	probeAbsent(ctx, t, session)
 
 	be.NilErr(t, rpc.EditConfig{Target: rpc.Running, Config: cfg.config(value)}.Exec(ctx, session))
 	defer func() {

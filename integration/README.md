@@ -133,7 +133,11 @@ another session confirms. While that commit waits, a dry run of a
 and to failing with `junos.ErrCommitPending`. What they commit is a
 configuration group that nothing applies, and they take it out again, so
 the device runs the same
-as before. Its commit history does not stay the same: one run adds 23
+as before. The group is `netconf-lib-probe`. A test that commits looks for
+it first and fails without touching it when the device runs a group of
+that name already: the test did not make it. A run that was cut short
+leaves the group behind too, and `delete groups netconf-lib-probe` takes
+it out. The commit history of the device does not stay the same: one run adds 23
 commits, 25 where notifications are configured, and Junos keeps 50. They
 are for a lab device. The whole suite then takes about ten minutes, which
 is more than `go test` allows a run by default, so `make integration-test`
