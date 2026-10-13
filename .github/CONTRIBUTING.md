@@ -38,9 +38,9 @@ installed.
 
 - One logical change per pull request.
 - CI runs the lint, the unit tests, the vulnerability scan and the
-  integration suite against netopeer2. `make junos-schema` runs once a
-  week, and for a change to `internal/cmd/junosschema`, to the Makefile or
-  to its workflow.
+  integration suite against netopeer2, for every pull request and once a
+  week. `make junos-schema` runs once a week, and for a change to
+  `internal/cmd/junosschema`, to the Makefile or to its workflow.
 - What a user of the library can notice gets an entry under Unreleased in
   [CHANGELOG.md](../CHANGELOG.md). The API is pre-1.0, so an exported name may
   change; the entry under Changed says how to move over.

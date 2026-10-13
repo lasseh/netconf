@@ -1,10 +1,14 @@
 name: Validate
 
+# Go, the linter and the list of known vulnerabilities change without a
+# commit here, so this runs by the week as well.
 on:
   push:
     branches:
       - main
   pull_request:
+  schedule:
+    - cron: "41 4 * * 1"
 
 permissions:
   contents: read
