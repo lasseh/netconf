@@ -132,9 +132,9 @@ What `Apply` takes care of:
   counts from when the confirmed commit is sent, which is before Junos
   starts counting, so the library gives up before Junos does. `Confirm` has
   to cover the commit, `Verify` and the confirmation.
-- A commit whose answer never arrives is `ErrCommitUnknown`, not a failure:
-  Junos may have carried it out. [After `ErrCommitUnknown`](#after-errcommitunknown)
-  says how to ask.
+- A commit whose answer never arrives, or cannot be read to its end, is
+  `ErrCommitUnknown`, not a failure: Junos may have carried it out.
+  [After `ErrCommitUnknown`](#after-errcommitunknown) says how to ask.
 - A commit that Junos answers without `<ok/>` is an error. Junos has such
   answers without an error in them: a private copy whose change no longer
   fits, because somebody else committed another value for the statement,
