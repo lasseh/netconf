@@ -25,6 +25,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          install-only: true
+      - run: make lint
 
   test:
     name: Unit Tests
