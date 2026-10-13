@@ -83,6 +83,77 @@ func TestNotifierBounds(t *testing.T) {
 	})
 }
 
+// The queue takes the room of what waits in it.  What went through it
+// leaves nothing behind, however long the queue has not been empty.
+func TestNotifierStorage(t *testing.T) {
+	quiet := slog.New(slog.DiscardHandler)
+	idle := func(context.Context, *Message) {}
+
+	// A handler that never catches up: the queue stays full, one
+	// notification goes out and one comes in.
+	t.Run("a queue that is never empty", func(t *testing.T) {
+		const bound, size = 4, 10
+		n := newNotifier(idle, NotifQueue{Messages: bound, Drop: true}, quiet)
+
+		var waiting []*Message
+		for range bound {
+			msg := notification(size)
+			be.NilErr(t, n.deliver(msg))
+			waiting = append(waiting, msg)
+		}
+		for range 10000 {
+			be.True(t, n.next() == waiting[0])
+
+			msg := notification(size)
+			be.NilErr(t, n.deliver(msg))
+			waiting = append(waiting[1:], msg)
+			// one more than fits is thrown away
+			be.NilErr(t, n.deliver(notification(size)))
+		}
+
+		be.Equal(t, bound, len(n.queue)-n.head)
+		be.Equal(t, int64(bound*size), n.bytes)
+		// a few times the bound, where it was a slot for each of the 10000
+		be.True(t, cap(n.queue) <= 8*bound)
+		for _, msg := range waiting {
+			be.True(t, n.next() == msg)
+		}
+		be.True(t, n.next() == nil)
+	})
+
+	t.Run("stop lets go of what waits", func(t *testing.T) {
+		n := newNotifier(idle, NotifQueue{Messages: 2}, quiet)
+		be.NilErr(t, n.deliver(notification(10)))
+		be.NilErr(t, n.deliver(notification(10)))
+
+		n.stop()
+		be.True(t, n.next() == nil)
+		be.Equal(t, int64(0), n.bytes)
+
+		// what arrives afterwards is thrown away, and that is no overflow
+		for range 5 {
+			be.NilErr(t, n.deliver(notification(10)))
+		}
+		be.True(t, n.next() == nil)
+	})
+
+	t.Run("stop while notifications arrive", func(t *testing.T) {
+		n := newNotifier(idle, NotifQueue{}, quiet)
+		go n.run()
+
+		arrived := make(chan struct{})
+		go func() {
+			defer close(arrived)
+			for range 1000 {
+				_ = n.deliver(notification(1))
+			}
+		}()
+		n.stop()
+		<-arrived
+		be.True(t, n.next() == nil)
+	})
+}
+
 const testNotification = `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-01-01T00:00:00Z</eventTime></notification>]]>]]>`
 
 // notifyingSession opens a session to a device that sends count

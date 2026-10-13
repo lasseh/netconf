@@ -67,6 +67,8 @@ type notifier struct {
 	head    int // the next message to hand over
 	bytes   int64
 	dropped int
+	// stopped says that nothing is handed over any more, see stop
+	stopped bool
 
 	// wake tells the dispatcher that the queue is no longer empty
 	wake chan struct{}
@@ -108,6 +110,11 @@ func (n *notifier) deliver(msg *Message) error {
 	size := int64(len(msg.body))
 
 	n.mu.Lock()
+	if n.stopped {
+		n.mu.Unlock()
+		n.report(size, true)
+		return nil
+	}
 	waiting := len(n.queue) - n.head
 	if waiting >= n.limit.Messages || (waiting > 0 && n.bytes+size > n.limit.Bytes) {
 		if !n.limit.Drop {
@@ -151,9 +158,13 @@ func (n *notifier) next() *Message {
 	n.head++
 	n.bytes -= int64(len(msg.body))
 
-	// start over at the front once the queue has run empty
-	if n.head == len(n.queue) {
-		n.queue, n.head = n.queue[:0], 0
+	// Move what waits to the front once it is no more than what was taken
+	// from in front of it.  The queue then takes the room of what waits,
+	// not of everything that went through it since it was last empty.
+	if waiting := len(n.queue) - n.head; n.head >= waiting {
+		copy(n.queue, n.queue[n.head:])
+		clear(n.queue[waiting:])
+		n.queue, n.head = n.queue[:waiting], 0
 	}
 	return msg
 }
@@ -178,10 +189,17 @@ func (n *notifier) run() {
 	}
 }
 
-// stop ends the dispatch.  A handler that is running is told through its
-// context and not waited for.
+// stop ends the dispatch and lets go of what waits.  A handler that is
+// running is told through its context and not waited for.  A notification
+// that arrives afterwards is thrown away, which is no overflow.
 func (n *notifier) stop() {
-	if n != nil {
-		n.cancel()
+	if n == nil {
+		return
 	}
+	n.cancel()
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.stopped = true
+	n.queue, n.head, n.bytes = nil, 0, 0
 }
