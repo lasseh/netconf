@@ -463,6 +463,9 @@ func (op LoadConfiguration) Exec(ctx context.Context, session *netconf.Session) 
 // rejects.  A reply with warnings and no count has not been seen from a
 // device and says nothing certain, so its error holds their text only.
 //
+// The reply is read to its end for the <ok/>.  One that stops being XML
+// behind it says nothing certain either, and fails with where it stops.
+//
 // name is the name of the operation, which every error begins with.
 func execOK(ctx context.Context, session *netconf.Session, op any, name string) (*netconf.Reply, error) {
 	reply, err := session.ExecReply(ctx, op)
@@ -470,10 +473,14 @@ func execOK(ctx context.Context, session *netconf.Session, op any, name string) 
 		return reply, operr.Named(name, err)
 	}
 
-	_, err = reply.Element("ok")
-	if err == nil {
+	oks, err := reply.Elements("ok")
+	switch {
+	case err != nil:
+		return reply, operr.Named(name, err)
+	case len(oks) > 0:
 		return reply, nil
 	}
+	err = fmt.Errorf("%w: <ok>", netconf.ErrElementNotFound)
 	_, counted := reply.Element("load-error-count")
 	switch {
 	case len(reply.Warnings) == 0:

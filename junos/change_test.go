@@ -972,6 +972,23 @@ func TestCommitConfiguration(t *testing.T) {
 		be.False(t, errors.As(err, &said))
 	})
 
+	// The reply is read to its end: an <ok/> with something behind it that
+	// is not XML is no answer, and the error says where the reply stops.
+	t.Run("ok in a reply that is not XML to its end", func(t *testing.T) {
+		for _, body := range []string{"<ok/><note>a\x01b</note>", "<ok/><unfinished>"} {
+			sess, _ := session(t, body)
+			reply, err := junos.CommitConfiguration{}.Exec(context.Background(), sess)
+			be.Nonzero(t, err)
+			be.In(t, "commit-configuration: ", err.Error())
+			be.False(t, errors.Is(err, netconf.ErrElementNotFound))
+
+			var syntaxErr *netconf.SyntaxError
+			be.True(t, errors.As(err, &syntaxErr))
+			// what the device sent is still there to look at
+			be.In(t, "<ok/>", string(reply.Raw))
+		}
+	})
+
 	// No device was seen to answer like this.  A warning by itself does not
 	// say that nothing was committed, so the error must not read as a
 	// refusal: it has no RPCErrors in it, only their text.

@@ -23,8 +23,12 @@ read that reply as a success.
   namespace, would be misread as a failure. No data model we know does
   this, and failing a read is the cheaper mistake than passing a failed
   change.
-- The whole reply is tokenised once to find errors, also when the caller
-  only wants the raw bytes.
+- A reply that has the name of an error element in it is tokenised once to
+  find the errors, also when the caller only wants the raw bytes. A reply
+  without one is handed on unread, so the session does not notice when
+  such a reply is not XML. What needs an acknowledgement reads the reply
+  itself: `junos.LoadConfiguration` and `junos.CommitConfiguration` read
+  it to its end for the `<ok/>`.
 - An rpc-error without `<error-severity>` (non-conforming servers) counts
   as an error, not a warning.
 - A failed operation still returns its reply next to the error
