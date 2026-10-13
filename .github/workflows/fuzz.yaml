@@ -1,0 +1,57 @@
+name: Fuzz
+
+# `make test` runs the seeds of every fuzz target.  This gives each target
+# time to look for new inputs, which a push does not wait for.  On a pull
+# request it only shows that the job still works.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: Time for each fuzz target
+        default: 5m
+  pull_request:
+    paths:
+      - Makefile
+      - .github/workflows/fuzz.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    env:
+      FUZZTIME: ${{ inputs.fuzztime || (github.event_name == 'pull_request' && '10s') || '5m' }}
+    steps:
+      - uses: actions/checkout@v7
+      # The cache of setup-go holds the whole build cache of Go, the corpus
+      # in it, under a key that the jobs of Validate read as well.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      # What earlier runs found.  GitHub drops a cache that nothing has read
+      # for seven days, so this lasts as long as the job runs by the night.
+      - id: corpus
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-
+      - run: make fuzz FUZZTIME="$FUZZTIME"
+      - if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-${{ github.run_id }}-${{ github.run_attempt }}
+      # The log names the input that failed.  It goes into testdata/fuzz of
+      # its package with the fix.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"

@@ -41,6 +41,10 @@ installed.
   integration suite against netopeer2, for every pull request and once a
   week. `make junos-schema` runs once a week, and for a change to
   `internal/cmd/junosschema`, to the Makefile or to its workflow.
+- `make fuzz` runs every night with five minutes for each target, and
+  starts from what the nights before found. A run that fails keeps the
+  input as the artifact `fuzz-failures`. For a change to the Makefile or to
+  its workflow it runs with ten seconds for each target.
 - What a user of the library can notice gets an entry under Unreleased in
   [CHANGELOG.md](../CHANGELOG.md). The API is pre-1.0, so an exported name may
   change; the entry under Changed says how to move over.
