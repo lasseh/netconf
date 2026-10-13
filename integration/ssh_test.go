@@ -1554,8 +1554,8 @@ func TestJunosChangeConfirmed(t *testing.T) {
 // token is found once more, in the same entry, which waits no longer.
 //
 // The context of the change ends 150 ms after the commit was sent.  A
-// device that commits faster than that answers in time, and the test fails
-// over a commit whose outcome is known.
+// device that commits faster than that answers in time.  The outcome is
+// known then and there is nothing to find out, so the test is skipped.
 func TestJunosCommitUnknown(t *testing.T) {
 	session := commitSession(t)
 	other := setupSSH(t)
@@ -1565,13 +1565,28 @@ func TestJunosCommitUnknown(t *testing.T) {
 	// commit has been sent: Review is the last thing before it.
 	cutOff := func(t *testing.T, change junos.Change) {
 		t.Helper()
+		const moment = 150 * time.Millisecond
 		applyCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		var cut *time.Timer
 		change.Review = func(context.Context, string) error {
-			time.AfterFunc(150*time.Millisecond, cancel)
+			cut = time.AfterFunc(moment, cancel)
 			return nil
 		}
+		if change.Confirm > 0 {
+			// Verify is called once the confirmed commit has been answered.
+			// It was not cut off then, and its confirmation is not to be.
+			change.Verify = func(context.Context) error {
+				cut.Stop()
+				return nil
+			}
+		}
 		result, err := change.Apply(applyCtx, session)
+		// ErrNotConfirmed is the context ending between the answer to the
+		// confirmed commit and Verify: the commit was answered all the same
+		if err == nil || errors.Is(err, junos.ErrNotConfirmed) {
+			t.Skipf("the device answered the commit within %s: its outcome is known, skipping test", moment)
+		}
 		be.True(t, errors.Is(err, junos.ErrCommitUnknown))
 		be.True(t, errors.Is(err, context.Canceled))
 		be.False(t, result.Committed)
