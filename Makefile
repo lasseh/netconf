@@ -1,10 +1,12 @@
 GO ?= go
 GOFLAGS ?=
+export GOFLAGS
+TESTFLAGS ?=
 
 # Detect gotestsum
-GOTESTSUM := $(shell command -v gotestsum 2>/dev/null)
+GOTESTSUM ?= $(shell command -v gotestsum 2>/dev/null)
 ifdef GOTESTSUM
-  TEST_CMD := gotestsum --format testdox --
+  TEST_CMD := $(GOTESTSUM) --format testdox --raw-command -- $(GO) test -json
 else
   TEST_CMD := $(GO) test
 endif
@@ -27,7 +29,7 @@ JUNOS_YANG_MORE ?=
 JUNOS_YANG_MODULES := $(foreach family,$(JUNOS_FAMILIES),\
 	'/*/*/**/conf/**/$(family)-conf-system@*.yang' '/*/*/**/rpc/**/$(family)-rpc-system@*.yang')
 
-.PHONY: help build build-linux test lint coverage fuzz tidy vulncheck fix clean \
+.PHONY: help build build-linux check test lint coverage fuzz tidy vulncheck fix clean \
 	integration-test integration-netopeer2 junos-schema
 
 ##@ General
@@ -36,36 +38,39 @@ help: ## Show this help
 
 ##@ Build
 build: ## Compile all packages, including integration tests
-	$(GO) build $(GOFLAGS) ./...
+	$(GO) build ./...
 	$(GO) vet -tags=integration ./...
 
 build-linux: ## Cross-compile for linux (amd64 and 32-bit 386)
-	GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) ./...
-	GOOS=linux GOARCH=386 $(GO) build $(GOFLAGS) ./...
+	GOOS=linux GOARCH=amd64 $(GO) build ./...
+	GOOS=linux GOARCH=386 $(GO) build ./...
 
 ##@ Quality
+check: build test lint ## Run the build, unit tests, and linter
+
 test: ## Run unit tests
-	$(TEST_CMD) -race ./...
+	$(TEST_CMD) -race $(TESTFLAGS) ./...
 
 lint: ## Run linter (includes vet, fmt, imports via golangci-lint)
 	golangci-lint run ./...
 
 coverage: ## Run tests with coverage
-	$(TEST_CMD) -race -coverprofile=coverage.out ./...
+	$(TEST_CMD) -race -coverprofile=coverage.out $(TESTFLAGS) ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@$(GO) tool cover -func=coverage.out | tail -1
 
 fuzz: ## Run every fuzz target for FUZZTIME (their seeds already run in `make test`)
-	@set -e; for pkg in $$($(GO) list ./...); do \
-		for target in $$($(GO) test -list '^Fuzz' $$pkg | grep '^Fuzz' || true); do \
+	@set -e; packages=$$($(GO) list ./...); for pkg in $$packages; do \
+		tests=$$($(GO) test -list '^Fuzz' "$$pkg"); \
+		for target in $$(printf '%s\n' "$$tests" | awk '/^Fuzz/ {print $$1}'); do \
 			echo "==> $$pkg $$target"; \
-			$(GO) test -run '^$$' -fuzz "^$$target\$$" -fuzztime $(FUZZTIME) $$pkg; \
+			$(GO) test -run '^$$' -fuzz "^$$target\$$" -fuzztime $(FUZZTIME) "$$pkg"; \
 		done; \
 	done
 
 ##@ Integration
 integration-test: ## Run integration tests against the device in NETCONF_DUT_* (see integration/README.md)
-	$(GO) test -tags=integration -count=1 -v -timeout 30m ./integration/...
+	$(GO) test -tags=integration -count=1 -v -timeout 30m $(TESTFLAGS) ./integration/...
 
 integration-netopeer2: ## Run integration tests against a containerized netopeer2 server
 	$(COMPOSE)/netopeer2.yml $(COMPOSE_UP)
@@ -77,12 +82,11 @@ junos-schema: ## Compare what the library reads with the YANG Juniper publishes 
 	@git -C $(JUNOS_YANG) sparse-checkout set --no-cone $(JUNOS_YANG_MODULES)
 	@git -C $(JUNOS_YANG) fetch --quiet --depth 1 origin HEAD
 	@git -C $(JUNOS_YANG) checkout --quiet --detach FETCH_HEAD
-	$(GO) run $(GOFLAGS) ./internal/cmd/junosschema $(JUNOS_YANG) $(JUNOS_YANG_MORE)
+	$(GO) run ./internal/cmd/junosschema $(JUNOS_YANG) $(JUNOS_YANG_MORE)
 
 ##@ Utility
 tidy: ## Verify go.mod and go.sum are tidy
-	$(GO) mod tidy
-	@git diff --exit-code go.mod go.sum || (echo "go.mod/go.sum not tidy" && exit 1)
+	$(GO) mod tidy -diff
 
 vulncheck: ## Scan for known vulnerabilities
 	govulncheck ./...

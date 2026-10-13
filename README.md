@@ -181,7 +181,8 @@ The API is pre-1.0. Exported names can change between releases, and
 
 ```bash
 make help                   # every target
-make build test lint        # what a change has to pass
+make check                  # build, unit tests, and lint
+make test TESTFLAGS=-count=1 # rerun tests without cached results
 make fuzz                   # every fuzz target, 10 seconds each
 make integration-netopeer2  # the integration suite against netopeer2 in Docker
 make integration-test       # the same suite against a device of yours
