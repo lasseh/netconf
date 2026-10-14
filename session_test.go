@@ -188,7 +188,7 @@ func TestOpenHelloFailure(t *testing.T) {
 }
 
 // A caller that builds the rpc message itself keeps it as it was: the
-// session numbers a copy, and leaves a message-id the caller chose alone.
+// session numbers a copy, also when the caller put a message-id in it.
 func TestExecReplyWithRPCMessage(t *testing.T) {
 	tt := netconftest.NewTransport(t, echoHandler)
 	session, err := Open(context.Background(), tt)
@@ -203,8 +203,9 @@ func TestExecReplyWithRPCMessage(t *testing.T) {
 	chosen := &RPC{Operation: "<get/>", MessageID: "custom-id"}
 	reply, err = session.ExecReply(context.Background(), chosen)
 	be.NilErr(t, err)
-	be.In(t, `message-id="custom-id"`, string(reply.Raw))
-	be.In(t, `message-id="custom-id"`, tt.Outputs()[2])
+	be.In(t, `message-id="2"`, string(reply.Raw))
+	be.Equal(t, "2", netconftest.ExtractMessageID(tt.Outputs()[2]))
+	be.Equal(t, "custom-id", chosen.MessageID)
 }
 
 func TestOperationSuccess(t *testing.T) {

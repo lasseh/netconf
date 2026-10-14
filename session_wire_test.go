@@ -520,24 +520,68 @@ func TestOperationRacingTransportDeath(t *testing.T) {
 	}
 }
 
-func TestDuplicateMessageID(t *testing.T) {
-	sess := wireSession(t, func(_, _ string) string { return "]]>]]>" }) // never answers
+// The message-id a caller puts in a request is not sent.  Two requests that
+// bring the same one, and the first is given up on: the late answer to the
+// first goes to nobody, and the second gets its own.  Over chunked framing
+// to Junos the second waits for that late answer before it goes out.
+func TestMessageIDOfTheCaller(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hello string
+		turn  bool
+	}{
+		{name: "end-of-message framing", hello: wireHello},
+		{name: "junos over chunked framing", hello: wireHelloJunos11, turn: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, dev := turnSession(t, tc.hello)
+			ctx := testCtx(t)
 
-	first := make(chan error, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		_, err := sess.ExecReply(ctx, &RPC{MessageID: "dup", Operation: "<get/>"})
-		first <- err
-	}()
-	time.Sleep(50 * time.Millisecond)
+			// "1" is also the first number of the session
+			ctxA, cancelA := context.WithCancel(ctx)
+			first := make(chan error, 1)
+			go func() {
+				_, err := sess.ExecReply(ctxA, &RPC{MessageID: "1", Operation: "<get-config/>"})
+				first <- err
+			}()
+			one := dev.next(t)
+			cancelA()
+			be.True(t, errors.Is(<-first, context.Canceled))
 
-	_, err := sess.ExecReply(testCtx(t), &RPC{MessageID: "dup", Operation: "<get/>"})
-	be.Nonzero(t, err)
-	be.In(t, "already pending", err.Error())
+			type outcome struct {
+				reply *Reply
+				err   error
+			}
+			second := make(chan outcome, 1)
+			go func() {
+				reply, err := sess.ExecReply(ctx, &RPC{MessageID: "1", Operation: "<commit/>"})
+				second <- outcome{reply, err}
+			}()
+			var two string
+			if tc.turn {
+				dev.nothing(t)
+			} else {
+				two = dev.next(t)
+			}
 
-	cancel()
-	be.True(t, errors.Is(<-first, context.Canceled))
+			be.NilErr(t, dev.Send(netconftest.Reply(netconftest.ExtractMessageID(one), "<data>the answer to get-config</data>")))
+			if tc.turn {
+				two = dev.next(t)
+			}
+			be.In(t, "<commit/>", two)
+			be.Unequal(t, netconftest.ExtractMessageID(one), netconftest.ExtractMessageID(two))
+			select {
+			case got := <-second:
+				t.Fatalf("the commit was answered before the device answered it: %v", got.err)
+			case <-time.After(held):
+			}
+
+			dev.answer(t, two)
+			got := <-second
+			be.NilErr(t, got.err)
+			be.In(t, "<ok/>", string(got.reply.Raw))
+		})
+	}
 }
 
 // failingWrites is a transport whose writes fail once the first messages are

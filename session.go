@@ -625,11 +625,11 @@ func (s *Session) do(ctx context.Context, rpc *RPC, stream, internal bool) (msg 
 		return nil, traced, err
 	}
 
-	// the caller keeps its message; ours gets a message-id unless it has one
+	// The caller keeps its message, and ours gets a message-id of the
+	// session's.  One the caller chose could be that of a request given up
+	// on, whose reply may still come, or the next number of the session.
 	rpc = rpc.Clone()
-	if rpc.MessageID == "" {
-		rpc.MessageID = s.nextMessageID()
-	}
+	rpc.MessageID = s.nextMessageID()
 
 	// encoding/xml writes attribute names verbatim, so a malformed name
 	// would rewrite the message.

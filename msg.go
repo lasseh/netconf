@@ -16,7 +16,8 @@ import (
 type RPC struct {
 	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:netconf:base:1.0 rpc"`
 
-	// Managed by the session.  Will be overwritten when sent on the wire.
+	// Managed by the session: it sends every operation with a message-id of
+	// its own, whatever this holds.
 	MessageID string `xml:"message-id,attr"`
 
 	// User-defined attributes (e.g. xmlns:ex="...").  Per RFC6241 sec 7.3, these

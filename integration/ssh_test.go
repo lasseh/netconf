@@ -382,12 +382,13 @@ func TestRequestsAtOnce(t *testing.T) {
 	}
 
 	// sized returns the request as a message that takes wire bytes over
-	// chunks
-	sized := func(id string, wire int) *netconf.RPC {
+	// chunks once the session has given it message-id id
+	sized := func(id, wire int) *netconf.RPC {
 		t.Helper()
 		msg := netconf.NewRPC(request)
-		msg.MessageID = id
-		bare, err := xml.Marshal(msg)
+		numbered := msg.Clone()
+		numbered.MessageID = strconv.Itoa(id)
+		bare, err := xml.Marshal(numbered)
 		be.NilErr(t, err)
 		// the headers of its chunks and their end take a few bytes of that
 		for size := max(len(bare), wire-64); size <= wire; size++ {
@@ -413,9 +414,12 @@ func TestRequestsAtOnce(t *testing.T) {
 			pairs++
 			pairCtx, done := context.WithTimeout(ctx, time.Minute)
 			errs := make(chan error, 2)
-			// whichever of the two goes first, the other ends at that place
+			// Whichever of the two goes first, the other ends at that place.
+			// The session numbers its requests from 1, so the two have the
+			// message-ids 2*pairs-1 and 2*pairs in either order, and take the
+			// same bytes together both ways.
 			for i, wire := range []int{first, at + end - first} {
-				msg := sized("pair-"+strconv.Itoa(pairs)+"-"+strconv.Itoa(i), wire)
+				msg := sized(2*pairs-1+i, wire)
 				go func() {
 					reply, err := session.ExecReply(pairCtx, msg)
 					if err == nil {
