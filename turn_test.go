@@ -163,6 +163,30 @@ func TestOneRequestAtATime(t *testing.T) {
 	be.NilErr(t, <-second)
 }
 
+// A reply without a message-id answers the request that was sent.  One that
+// waits for its turn is not in question, the device has seen nothing of it,
+// and it goes out when the turn is over.
+func TestReplyWithoutMessageIDWhileAnotherWaits(t *testing.T) {
+	const refusal = `<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><rpc-error><error-type>rpc</error-type><error-tag>malformed-message</error-tag><error-severity>error</error-severity></rpc-error></rpc-reply>`
+
+	sess, dev := turnSession(t, wireHelloJunos11)
+	ctx := testCtx(t)
+
+	first := ask(ctx, sess, "<first/>")
+	dev.next(t)
+	second := ask(ctx, sess, "<second/>")
+	dev.nothing(t)
+
+	be.NilErr(t, dev.Send(refusal))
+	var rpcErrs RPCErrors
+	be.True(t, errors.As(<-first, &rpcErrs))
+
+	two := dev.next(t)
+	be.In(t, "<second/>", two)
+	dev.answer(t, two)
+	be.NilErr(t, <-second)
+}
+
 // Which sessions have one request on its way at a time: those over chunked
 // framing to a device that advertises the Junos capability.  On any other
 // the second request is written while the first waits for its answer.

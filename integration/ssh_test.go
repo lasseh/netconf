@@ -382,12 +382,13 @@ func TestRequestsAtOnce(t *testing.T) {
 	}
 
 	// sized returns the request as a message that takes wire bytes over
-	// chunks
-	sized := func(id string, wire int) *netconf.RPC {
+	// chunks once the session has given it message-id id
+	sized := func(id, wire int) *netconf.RPC {
 		t.Helper()
 		msg := netconf.NewRPC(request)
-		msg.MessageID = id
-		bare, err := xml.Marshal(msg)
+		numbered := msg.Clone()
+		numbered.MessageID = strconv.Itoa(id)
+		bare, err := xml.Marshal(numbered)
 		be.NilErr(t, err)
 		// the headers of its chunks and their end take a few bytes of that
 		for size := max(len(bare), wire-64); size <= wire; size++ {
@@ -413,9 +414,12 @@ func TestRequestsAtOnce(t *testing.T) {
 			pairs++
 			pairCtx, done := context.WithTimeout(ctx, time.Minute)
 			errs := make(chan error, 2)
-			// whichever of the two goes first, the other ends at that place
+			// Whichever of the two goes first, the other ends at that place.
+			// The session numbers its requests from 1, so the two have the
+			// message-ids 2*pairs-1 and 2*pairs in either order, and take the
+			// same bytes together both ways.
 			for i, wire := range []int{first, at + end - first} {
-				msg := sized("pair-"+strconv.Itoa(pairs)+"-"+strconv.Itoa(i), wire)
+				msg := sized(2*pairs-1+i, wire)
 				go func() {
 					reply, err := session.ExecReply(pairCtx, msg)
 					if err == nil {
@@ -566,6 +570,7 @@ func TestMessageTimeout(t *testing.T) {
 		return
 	}
 	_, config := probe()
+	probeAbsent(testCtx(t), t, session)
 	t.Cleanup(func() {
 		measure("commit that takes the group out", func(ctx context.Context) error {
 			_, err := junos.Change{Format: junos.FormatSet, Config: "delete groups " + probeGroup}.Apply(ctx, session)
@@ -1332,13 +1337,16 @@ func TestJunosLoadPatchURLRescue(t *testing.T) {
 // The tests from here to TestJunosErrorDetail commit, and only run when
 // asked for.  What they commit is a configuration group that nothing
 // applies, and they take it out again: the device runs the same as before,
-// with a longer commit history.  They are meant for a lab device.
+// with a longer commit history.  They are meant for a lab device.  A group
+// of that name that the device runs already is not theirs, and they fail
+// without touching it, see probeAbsent.
 
 // probeGroup is the configuration group these tests work with.
 const probeGroup = "netconf-lib-probe"
 
 // commitSession returns a session for a test that commits.  The probe group
-// is taken out of the configuration when the test is over.
+// must not be there when the test begins, and is taken out of the
+// configuration when the test is over.
 func commitSession(t *testing.T) *netconf.Session {
 	t.Helper()
 	onlyFlavor(t, "junos")
@@ -1347,6 +1355,7 @@ func commitSession(t *testing.T) *netconf.Session {
 	}
 
 	session := setupSSH(t)
+	probeAbsent(testCtx(t), t, session)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
@@ -1549,8 +1558,8 @@ func TestJunosChangeConfirmed(t *testing.T) {
 // token is found once more, in the same entry, which waits no longer.
 //
 // The context of the change ends 150 ms after the commit was sent.  A
-// device that commits faster than that answers in time, and the test fails
-// over a commit whose outcome is known.
+// device that commits faster than that answers in time.  The outcome is
+// known then and there is nothing to find out, so the test is skipped.
 func TestJunosCommitUnknown(t *testing.T) {
 	session := commitSession(t)
 	other := setupSSH(t)
@@ -1560,13 +1569,28 @@ func TestJunosCommitUnknown(t *testing.T) {
 	// commit has been sent: Review is the last thing before it.
 	cutOff := func(t *testing.T, change junos.Change) {
 		t.Helper()
+		const moment = 150 * time.Millisecond
 		applyCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		var cut *time.Timer
 		change.Review = func(context.Context, string) error {
-			time.AfterFunc(150*time.Millisecond, cancel)
+			cut = time.AfterFunc(moment, cancel)
 			return nil
 		}
+		if change.Confirm > 0 {
+			// Verify is called once the confirmed commit has been answered.
+			// It was not cut off then, and its confirmation is not to be.
+			change.Verify = func(context.Context) error {
+				cut.Stop()
+				return nil
+			}
+		}
 		result, err := change.Apply(applyCtx, session)
+		// ErrNotConfirmed is the context ending between the answer to the
+		// confirmed commit and Verify: the commit was answered all the same
+		if err == nil || errors.Is(err, junos.ErrNotConfirmed) {
+			t.Skipf("the device answered the commit within %s: its outcome is known, skipping test", moment)
+		}
 		be.True(t, errors.Is(err, junos.ErrCommitUnknown))
 		be.True(t, errors.Is(err, context.Canceled))
 		be.False(t, result.Committed)
@@ -1864,6 +1888,11 @@ func TestJunosEphemeral(t *testing.T) {
 	latest := commits(ctx, t, other)[0]
 
 	be.NilErr(t, junos.OpenConfiguration{Ephemeral: true}.Exec(ctx, session))
+	// a list of that name that is there already is not the test's to take out
+	if before := read(t, session, true); before != "" {
+		be.NilErr(t, junos.CloseConfiguration{}.Exec(ctx, session))
+		t.Fatalf("the ephemeral database has a prefix list named %q that this test did not make: %s", probeGroup, before)
+	}
 	defer func() {
 		// whatever became of the test, the list does not stay in the database
 		_, err := junos.LoadConfiguration{Format: junos.FormatSet, Config: "delete " + list}.Exec(ctx, session)

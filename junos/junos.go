@@ -310,9 +310,12 @@ func jsonText(object map[string]any, name string) string {
 // It takes care of two things Junos does to replies.  The element is found
 // at any depth: a device with several routing engines or chassis members
 // wraps each one's answer in a <multi-routing-engine-item>, and which
-// requests get that treatment differs between platforms.  And every string
-// decoded comes without the white space around it, as Junos pads many
-// values with line breaks.
+// requests get that treatment differs between platforms.  And the strings of
+// v come without the white space around them, as Junos pads many values with
+// line breaks.  That is every string in a field encoding/xml decodes into,
+// also one that v held before and the reply has nothing for.  A field it
+// leaves alone, one that is not exported or has the tag `xml:"-"`, is not
+// touched.
 //
 // A reply without the element fails with netconf.ErrElementNotFound.
 func Decode(reply *netconf.Reply, name string, v any) error {
@@ -352,31 +355,53 @@ func Decode(reply *netconf.Reply, name string, v any) error {
 	return nil
 }
 
-// trimStrings removes the white space around every string reachable from v.
-// Byte slices are left as received.
+// trimStrings removes the white space around every string reachable from v
+// through what encoding/xml decodes into.  Byte slices are left as received.
 func trimStrings(v reflect.Value) {
-	switch v.Kind() {
-	case reflect.String:
-		if v.CanSet() {
-			v.SetString(strings.TrimSpace(v.String()))
-		}
-	case reflect.Pointer:
-		if !v.IsNil() {
-			trimStrings(v.Elem())
-		}
-	case reflect.Struct:
-		for _, field := range v.Fields() {
-			trimStrings(field)
-		}
-	case reflect.Slice, reflect.Array:
-		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return
-		}
-		for i := range v.Len() {
-			trimStrings(v.Index(i))
-		}
-	default:
+	// the pointers followed so far: what v held before the decoding may
+	// point back at itself
+	type pointer struct {
+		to reflect.Type
+		at uintptr
 	}
+	seen := make(map[pointer]struct{})
+
+	var trim func(reflect.Value)
+	trim = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.String:
+			if v.CanSet() {
+				v.SetString(strings.TrimSpace(v.String()))
+			}
+		case reflect.Pointer:
+			if v.IsNil() {
+				return
+			}
+			p := pointer{v.Type(), v.Pointer()}
+			if _, ok := seen[p]; ok {
+				return
+			}
+			seen[p] = struct{}{}
+			trim(v.Elem())
+		case reflect.Struct:
+			for field, value := range v.Fields() {
+				// the fields encoding/xml leaves alone are the caller's
+				if field.Tag.Get("xml") == "-" || !field.IsExported() && !field.Anonymous {
+					continue
+				}
+				trim(value)
+			}
+		case reflect.Slice, reflect.Array:
+			if v.Type().Elem().Kind() == reflect.Uint8 {
+				return
+			}
+			for i := range v.Len() {
+				trim(v.Index(i))
+			}
+		default:
+		}
+	}
+	trim(v)
 }
 
 // trimNewlines removes the line breaks Junos puts around text content

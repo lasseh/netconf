@@ -677,6 +677,31 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			diff:      wantDiff,
 		},
 		{
+			// An <ok/> in a reply that stops being XML behind it says
+			// nothing certain.  The session does not look through a reply
+			// that has no error in it, so the commit has to.
+			name: "the commit is acknowledged in a reply that is not XML to its end",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepCommit: {body: commitDone + notXML}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepCommit, stepRollback, stepUnlock},
+			says:      "junos: commit: ",
+			is:        []error{junos.ErrCommitUnknown},
+			isNot:     []error{netconf.ErrElementNotFound},
+			diff:      wantDiff,
+		},
+		{
+			name: "the commit is acknowledged in a reply that is cut short",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepCommit: {body: "<ok/><unfinished>"}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepCommit, stepRollback, stepUnlock},
+			says:      "junos: commit: ",
+			is:        []error{junos.ErrCommitUnknown},
+			isNot:     []error{netconf.ErrElementNotFound},
+			diff:      wantDiff,
+		},
+		{
 			// A warning is not a refusal.  Without a count of what Junos
 			// could not load, the commit may have gone through.
 			name: "the commit is answered with a warning and nothing else",
@@ -697,6 +722,15 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			wantSteps: []string{stepLock, stepLoad, stepRollback, stepUnlock},
 			says:      "junos: load configuration: ",
 			is:        []error{netconf.ErrElementNotFound},
+		},
+		{
+			name: "the load is acknowledged in a reply that is not XML to its end",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepLoad: {body: loadOK + notXML}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepRollback, stepUnlock},
+			says:      "junos: load configuration: ",
+			isNot:     []error{junos.ErrCommitUnknown, netconf.ErrElementNotFound},
 		},
 		{
 			// Junos may be committing: the rollback after it changes nothing

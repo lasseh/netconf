@@ -105,7 +105,7 @@ func (s *scope) open() string {
 		b strings.Builder
 		// the prefixes there is a declaration for already, "" for the
 		// default namespace: the nearest one counts
-		seen []string
+		seen = make(map[string]struct{})
 	)
 	b.WriteString("<scope")
 	for ; s != nil; s = s.parent {
@@ -115,10 +115,10 @@ func (s *scope) open() string {
 			if decl.Name.Space == xmlns {
 				prefix = decl.Name.Local
 			}
-			if slices.Contains(seen, prefix) {
+			if _, ok := seen[prefix]; ok {
 				continue
 			}
-			seen = append(seen, prefix)
+			seen[prefix] = struct{}{}
 
 			b.WriteString(" " + xmlns)
 			if prefix != "" {

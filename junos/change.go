@@ -135,10 +135,11 @@ var (
 	// back to the previous configuration when the time is up.
 	ErrNotConfirmed = errors.New("commit not confirmed, Junos goes back to the previous configuration by itself")
 
-	// ErrCommitUnknown says that a commit was sent and its outcome never
-	// arrived: the context ended first, or the session did.  The change may
-	// be in effect or not, and after a confirmed commit it may be confirmed
-	// or not.  The device knows.
+	// ErrCommitUnknown says that a commit was sent and its outcome is not
+	// known: the context ended before the answer came, or the session did,
+	// or the answer says neither yes nor no, or cannot be read to its end.
+	// The change may be in effect or not, and after a confirmed commit it
+	// may be confirmed or not.  The device knows.
 	ErrCommitUnknown = errors.New("outcome of the commit unknown")
 )
 

@@ -101,18 +101,29 @@ func (t *replyTable) forget(msgID string, req *pendingReply) {
 // expected: an operation was given up on and its answer could still come.
 //
 // A server that could not parse an rpc replies without a message-id
-// (RFC6241 sec 4.2).  Such a reply is taken to answer the only outstanding
-// operation, unless a reply to an abandoned one may still be on its way.
+// (RFC6241 sec 4.2).  Such a reply is taken to answer the only operation
+// that was sent, unless a reply to an abandoned one may still be on its way.
+// An operation that waits to be sent is not in question: the server has seen
+// nothing of it.
 func (t *replyTable) resolve(msgID string) (req *pendingReply, late bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if msgID == "" {
-		if t.orphans > 0 || len(t.pending) != 1 {
+		if t.orphans > 0 {
 			return nil, t.settleOrphan()
 		}
-		for id := range t.pending {
+		for id, req := range t.pending {
+			if !req.sent {
+				continue
+			}
+			if msgID != "" {
+				return nil, false
+			}
 			msgID = id
+		}
+		if msgID == "" {
+			return nil, false
 		}
 	}
 

@@ -18,6 +18,10 @@ First release line of the fork of `nemith.io/netconf` at commit `e745332`.
   `Session.DoStream` is `Session.Stream`, for replies too large to buffer.
   All three take the operation itself; pass a message built with `NewRPC`
   to put attributes on `<rpc>`. `Session.Prepare` is gone.
+- The session sends every operation with a message-id of its own. One set
+  in `RPC.MessageID` was sent as it was, and an operation that reused one,
+  or met the next number of the session, failed while the first waited for
+  its reply, or got that reply when the first had been given up on.
 - Operations started after `Session.Close` was called fail with `ErrClosed`.
 - An operation on a dead session returns an error that wraps both
   `ErrClosed` and the cause; compare with `errors.Is`.
@@ -302,7 +306,8 @@ First release line of the fork of `nemith.io/netconf` at commit `e745332`.
   is sent; previously the device received an empty or truncated frame.
 - Rpc attribute names are validated (they were written verbatim).
 - Frames without an XML element are skipped instead of ending the session;
-  an rpc-reply without message-id answers the only outstanding operation.
+  an rpc-reply without message-id answers the only operation that was
+  sent and has no reply yet.
 - Notifications queued when the session closes are dropped, not delivered
   late.
 - A failed write ends the session and reports `ErrClosed` like every other
