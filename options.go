@@ -137,7 +137,8 @@ func (o replyRepairOpt) apply(cfg *sessionConfig) {
 // for a device whose messages are not XML as they come: StripInvalidChars is
 // a function for the usual case, a control character in text the device
 // passes on, which fails every way of reading the message with a
-// SyntaxError.  Without the option no message is changed.
+// SyntaxError.  Without the option no repair callback runs; the automatic
+// Junos text normalization described below still runs.
 //
 // fn gets the message as the device sent it and may change it in place.
 // For a Junos device the session puts text that is not ASCII back together

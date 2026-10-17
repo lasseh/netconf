@@ -13,7 +13,9 @@
 // it, and errors.As the netconf.RPCErrors of the device.
 //
 // An operation can also be handed to netconf.Session.ExecReply to get the
-// reply as the server sent it.
+// buffered reply, including its warnings. Buffered Junos replies undergo
+// text normalization, and a configured reply repair may change the bytes;
+// use netconf.Session.Stream when the original message bytes are needed.
 package rpc
 
 import (
