@@ -371,8 +371,9 @@ case errors.Is(err, junos.ErrCandidateModified):
 With `LockWait` set, `Apply` asks for the lock again every second. When
 `LockWait` or the context runs out, it returns the last refusal, which
 names the holder, with the reason it stopped. Nothing is loaded before the
-lock, so asking again is safe. Junos 26.2 releases the lock of a session
-that ends and drops what that session loaded.
+lock, so asking again is safe. When the session that holds the lock
+ends, Junos 26.2 releases the lock within two seconds and drops what that
+session loaded.
 
 `Apply` does not wait for uncommitted changes in the candidate, which may
 never go away. It fails at once with `junos.ErrCandidateModified`, and
@@ -523,6 +524,9 @@ fmt.Printf("%s\n", set)
 
 What is committed to the ephemeral database is not part of the
 configuration, so `GetConfiguration` without `Candidate` does not show it.
+Two other ways to read it fail on Junos 26.2 and Junos OS Evolved 26.2.
+They refuse `show ephemeral-configuration` as a `junos.Command`, and they
+have no `<get-ephemeral-configuration>`.
 
 Give `OpenConfiguration` a context with a deadline, and close the session
 when it runs out. Junos gives an instance to one session at a time, so
