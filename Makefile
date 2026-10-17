@@ -29,7 +29,7 @@ JUNOS_YANG_MORE ?=
 JUNOS_YANG_MODULES := $(foreach family,$(JUNOS_FAMILIES),\
 	'/*/*/**/conf/**/$(family)-conf-system@*.yang' '/*/*/**/rpc/**/$(family)-rpc-system@*.yang')
 
-.PHONY: help build build-linux check test lint actionlint coverage fuzz tidy vulncheck fix clean \
+.PHONY: help build build-linux check test lint docs-check actionlint coverage fuzz tidy vulncheck fix clean \
 	integration-test integration-netopeer2 junos-schema
 
 ##@ General
@@ -46,13 +46,16 @@ build-linux: ## Cross-compile for linux (amd64 and 32-bit 386)
 	GOOS=linux GOARCH=386 $(GO) build ./...
 
 ##@ Quality
-check: build test lint ## Run the build, unit tests, and linter
+check: build test lint docs-check ## Run the build, unit tests, linter, and documentation checks
 
 test: ## Run unit tests
 	$(TEST_CMD) -race $(TESTFLAGS) ./...
 
 lint: ## Run linter (includes vet, fmt, imports via golangci-lint)
 	golangci-lint run ./...
+
+docs-check: ## Check local documentation links and Markdown heading anchors
+	$(GO) run ./internal/cmd/doccheck
 
 actionlint: ## Lint the GitHub Actions workflows
 	actionlint

@@ -1,182 +1,266 @@
-# NETCONF Client
+# NETCONF client
 
-A Go client library for the NETCONF network-device management protocol
-(RFC 6241 and friends). One context: everything here is about driving a
-protocol session against a network device.
+This glossary defines the domain language of this Go NETCONF client
+library, for contributors and AI agents naming a concept in code, docs or
+an issue. The one context is a NETCONF session with a device.
 
 ## Language
 
 ### Protocol
 
+**Device**:
+The NETCONF server at the other end of a session, such as a Junos router
+or netopeer2.
+_Avoid_: server, except in an RFC quote or an API name.
+
 **Session**:
 A live NETCONF conversation with one device, established by the hello
-exchange and addressed by a server-assigned session-id. All operations and
-notifications flow through a session.
+exchange and identified by its session-id.
+`netconf.Session`, opened with `netconf.Open`.
 _Avoid_: connection, client
 
 **Hello exchange**:
-The opening exchange in which client and server each advertise capabilities
-and the server assigns the session-id. A session does not exist until it
-completes.
+The opening exchange in which both sides advertise capabilities and the
+device assigns the session-id. When it fails, `netconf.Open` returns an
+error that matches `netconf.ErrHello`.
 _Avoid_: login, negotiation
 
 **Capability**:
-A URN advertised during the hello exchange declaring an optional protocol
-feature (`:candidate`, `:xpath`, base version). Determines which operations
-and framing a session may use.
+A URN advertised in the hello exchange that declares an optional protocol
+feature, such as `:candidate`. `netconf.CapabilitySet`, from
+`Session.ServerCaps`. The session checks for `junos.Capability` to decide
+on turns and Junos text normalization.
 _Avoid_: feature flag, extension
 
 **Operation**:
-A single protocol request (get-config, edit-config, kill-session, …) that
-knows its own wire encoding. Operations execute against a session and are
-correlated to their reply by message-id.
-_Avoid_: command, method, call. A command is what a transport runs to
-reach a device: the program of `transport/command`, the line `WithCommand`
-sends in place of the subsystem request, and the CLI line of
-`junos.Command`.
+One protocol action the client asks of the device, sent with
+`Session.ExecReply` or `Session.Exec` and matched to its reply by
+message-id.
+_Avoid_: method, call, RPC except in `netconf.RPC` and "RPC error", and
+command except for the program `nccmd.Start` runs, the line
+`ncssh.WithCommand` sends and the CLI line of `junos.Command`.
+
+**Typed operation**:
+A type in package `rpc` or `junos`, such as `rpc.GetConfig`, that
+marshals to one operation and whose `Exec` method sends it and reads the
+reply.
+
+**Request**:
+The `<rpc>` message an operation writes. Say request where the wire
+matters, such as framing, turns or `OperationInfo.Request`, and operation
+elsewhere.
 
 **Message**:
-One framed unit received from the server — either a reply or a
-notification.
-_Avoid_: packet, frame (framing is the transport-level encoding)
+One framed unit on the transport, in either direction: a hello, a request,
+a reply or a notification.
+_Avoid_: packet, frame
 
 **Reply**:
-The rpc-reply message correlated to an operation by message-id. Delivered
-buffered by default; see Streamed reply.
-_Avoid_: response
+The `<rpc-reply>` message matched to an operation by message-id. By default
+the session buffers it as a `netconf.Reply`.
+_Avoid_: response, and answer as a noun.
 
 **Session end**:
-The single moment a session is over, whether by close or because its
-transport died. Everything waiting on the session is released then, and the
-cause is kept for whoever asks.
-_Avoid_: disconnect, teardown
+The single moment a session is over. Everything waiting on the session is
+released, `Session.Done` is closed, and `Session.Err` reports the cause,
+or nil when `Session.Close` ended it. See
+[Sessions](docs/sessions.md#session-lifetime).
+_Avoid_: disconnect, teardown, session loss
 
 **Stalled message**:
-A message whose beginning has arrived and whose rest does not come. The
-beginning is the first byte of the message that is not white space, not
-the framing in front of it. The session waits on it and nothing else is
-read. Only a bound on the silence inside a message ends the session over
-it.
-_Avoid_: hang, frozen
+A message whose beginning has arrived and whose rest does not come. Only
+`netconf.WithMessageTimeout` ends the session on it, with
+`netconf.ErrMessageStalled`. See
+[Operations](docs/operations.md#stalled-messages).
+_Avoid_: hang, frozen, stall timeout
 
 **Streamed reply**:
-A reply handed over as a live stream from the transport instead of
-buffered. The consumer must close it before the session can process
-anything else — the obligation is part of asking for one.
+A reply that `Session.Stream` hands over unbuffered, as a
+`netconf.Message`. The caller must close it before the session can
+process anything else.
 
 **Turn**:
-What an operation takes before it is written and keeps until its reply has
-arrived whole, on a session that has one operation on its way at a time:
-over chunked framing to a Junos device. On every other session operations
-are written as they come.
-_Avoid_: lock (a datastore has one), queue
+The right to have the one outstanding request on a session over chunked
+framing to a Junos device. An operation takes the turn before its request
+is written and keeps it until the next message that is not a notification
+has arrived whole, normally its reply. See
+[Sessions](docs/sessions.md#requests-from-several-goroutines).
+_Avoid_: lock, queue
 
 **RPC error**:
-Structured error carried inside a reply (type, tag, severity, path), at any
-depth. Warning-severity RPC errors are informational and never fail an
-operation; everything else does. The error element of Junos, `<xnm:error>`,
-is one too: it has a message and neither type nor tag.
+A structured error, `netconf.RPCError`, in a reply at any depth or with
+the hello in `HelloError.RPCErrors`. A warning goes to `Reply.Warnings`,
+and every other RPC error fails the operation. The Junos `<xnm:error>`
+counts as one, with a message and neither type nor tag.
 _Avoid_: fault
 
 **Notification**:
-An unsolicited event message the server sends under an active subscription
-(RFC 5277). Notifications are delivered to a handler one at a time, in the
-order received. Those that arrive while the handler is busy wait in a
-bounded queue; overflowing it ends the session unless told to drop.
-_Avoid_: event, trap (SNMP vocabulary)
+A message the device sends without a request, under an RFC 5277
+subscription. The session hands notifications to the
+`netconf.WithNotifHandler` handler one at a time, in order. See
+[Sessions](docs/sessions.md#notifications).
+_Avoid_: event, which is what a notification reports, and trap.
+
+**Junos text normalization**:
+What the session does to every reply and notification it buffers from a
+Junos device. Junos 26.2 writes each byte above 127 as a character
+reference, and the session joins those that form one UTF-8 character. A
+streamed reply is not normalized. See [Junos](docs/junos.md#non-ascii-text).
+_Avoid_: rewrite, put back together, and repair, which is
+`netconf.WithReplyRepair`.
+
+**`rfc-compliant` mode**:
+The Junos statement `rfc-compliant` under `system services netconf`. With
+it, Junos 26.2 prefixes every NETCONF element with `nc` and sends
+configuration in the Junos YANG namespaces. See
+[What is verified](docs/junos-verified.md#rfc-compliant-mode).
 
 ### Configuration
 
 **Datastore**:
-A named configuration store on the device: running, candidate, startup.
-_Avoid_: database, config bank
+A named configuration store on the device: running, candidate or startup.
+`rpc.Datastore`.
+_Avoid_: database, config bank, except in Juniper names such as the
+ephemeral database.
 
 **Source**:
-Where a configuration operation reads from: a datastore, a URL, or an
-inline Config.
+Where a configuration operation reads from: a datastore, a URL or an
+inline Config. `rpc.Source`.
 _Avoid_: input, from
 
 **Target**:
-Where a configuration operation writes to: a datastore or a URL. An inline
-Config is never a valid target.
+Where a configuration operation writes to: a datastore or a URL, never an
+inline Config. `rpc.Target`.
 _Avoid_: destination, output
 
 **Config**:
-An inline configuration payload supplied by the caller and used as a
-source.
+An inline configuration payload the caller supplies as a source.
+`rpc.Config`.
 _Avoid_: blob, body
 
 **Change**:
-One alteration of a Junos device's configuration carried out as a whole:
-the candidate is reserved (locked, or copied privately), configuration is
-loaded into it, compared, committed, and the candidate given back whatever
-happened on the way.
-_Avoid_: transaction (nothing is undone by the library; an unconfirmed
-commit is taken back by Junos), push, deploy
+One configuration update on a Junos device that `junos.Change.Apply`
+carries out as a whole. `Apply` reserves the candidate, loads, compares
+and commits, and always releases it. See
+[Junos](docs/junos.md#changing-configuration).
+_Avoid_: transaction, push, deploy. The library never undoes a commit.
+
+**Private copy**:
+A copy of the candidate that Junos gives one session, like "configure
+private" in the CLI. A commit applies this session's changes only. A
+private copy takes no confirmed commit. `junos.Change{Private: true}`, or
+`junos.OpenConfiguration{Private: true}`.
+
+**Ephemeral database**:
+The Junos configuration database opened with
+`junos.OpenConfiguration{Ephemeral: true}`. Its commits are not part of
+the configuration and add no commit history entry. `junos.Change` does not
+work with it. See [Junos](docs/junos.md#the-ephemeral-database).
+_Avoid_: datastore, a NETCONF term.
+
+**Commit check**:
+An operation that has Junos validate the candidate and commit nothing,
+`junos.CommitConfiguration{Check: true}`. On Junos 26.2, a commit check
+from any session confirms a pending confirmed commit.
+_Avoid_: validate, which is `rpc.Validate`.
+
+**Dry run**:
+A `junos.Change` with `DryRun` set. `Apply` loads and compares, can send
+a commit check, and never commits. A dry run is not read-only. It takes
+the lock or a private copy. See [Junos](docs/junos.md#change-safety).
 
 **Confirmed commit**:
-A commit Junos takes back by itself unless a second commit, the
-confirmation, reaches it in time. Protects against a change that cuts the
-device off.
-_Avoid_: commit-confirm, rollback timer (that is how it works, not what it
-is)
+A commit the device takes back by itself unless it is confirmed in time.
+`junos.Change.Confirm`, `junos.CommitConfiguration.Confirm`, or
+`rpc.Commit` with `Confirmed`. On Junos 26.2, a commit or a commit check
+from any session confirms it. See
+[Standard NETCONF](docs/standard-netconf.md#confirmed-commits).
+_Avoid_: commit-confirm, rollback timer.
 
 **Filter**:
-A constraint on what a retrieval operation returns — subtree or XPath.
-XPath filtering requires the `:xpath` capability.
+A constraint on what a retrieval operation returns, `rpc.SubtreeFilter`
+or `rpc.XPathFilter`. RFC 6241 allows an XPath filter only on a device
+that advertises `:xpath`. See
+[Standard NETCONF](docs/standard-netconf.md#read-and-filter-configuration).
 _Avoid_: query, selector
 
 ### Transport
 
 **Transport**:
-The message-oriented pipe a session runs over: the SSH subsystem, a command
-run over SSH, TLS, or a process of the system that speaks NETCONF on its
-standard input and output. Owns framing and message boundaries; the
-session never sees raw bytes.
-_Avoid_: socket, connection, channel (SSH vocabulary)
+The message-oriented pipe a session runs over, `transport.Transport`,
+which owns the framing and the message boundaries. The library has SSH,
+TLS and command transports.
+_Avoid_: socket, connection, channel
+
+**SSH transport**:
+The transport in `transport/ssh`, imported as `ncssh`, built on
+`golang.org/x/crypto/ssh`. `ncssh.DialHost` connects the way the OpenSSH
+client does. See [Connecting](docs/connecting.md#options-of-ncsshdialhost).
+_Avoid_: native SSH transport, the library's ssh client
+
+**System OpenSSH**:
+The `ssh` program, run with `nccmd.Start` for what the SSH transport
+lacks, such as ProxyCommand or Kerberos. See
+[Connecting](docs/connecting.md#system-openssh).
+_Avoid_: the ssh of the system, the OpenSSH binary
+
+**SSH config**:
+The OpenSSH client configuration file. `ncssh.DialHost` reads some of its
+directives, only with `ncssh.WithSSHConfig`. See
+[Connecting](docs/connecting.md#the-ssh-config).
+_Avoid_: SSH configuration, ssh config in lowercase
+
+**Host key**:
+The public key with which a device or jump host proves its identity in the
+SSH handshake. See [Connecting](docs/connecting.md#host-keys).
+_Avoid_: host-key, server key, fingerprint. Write `known_hosts` in
+backticks when you mean the file.
 
 **Framing**:
-The RFC 6242 encoding that marks message boundaries on the byte stream:
-end-of-message framing or chunked framing.
+The RFC 6242 encoding that marks message boundaries on a byte stream,
+end-of-message or chunked. `transport.Framer` implements both.
 _Avoid_: encoding, packetization
 
 **Upgrade**:
-The one-way switch from end-of-message to chunked framing, taken after a
-hello exchange in which both peers advertise base:1.1.
+The one-way switch from end-of-message to chunked framing after a hello
+exchange in which both sides advertise `base:1.1`.
+`transport.Transport.Upgrade`.
 _Avoid_: renegotiation
 
 **Keepalive**:
-A periodic probe at the transport level that turns a silently dead peer
-into a closed transport, and thereby a session end.
+A periodic SSH keepalive request, `ncssh.WithKeepalive`, that turns a
+silently dead device or connection into a session end with
+`ncssh.ErrKeepalive`.
 _Avoid_: heartbeat, ping
 
 **Jump host**:
-An SSH server the transport logs in to only to be connected onward, to the
-next jump host or to the device. It has credentials and a host key of its
-own; nothing said about the device applies to it.
-_Avoid_: bastion, proxy, hop (a hop is any host on the way, the device
-included)
+An SSH server the SSH transport logs in to only to connect onward, set
+with `ncssh.WithProxyJump`. It has its own credentials and host key.
+See [Connecting](docs/connecting.md#jump-hosts).
+_Avoid_: bastion, proxy and hop as names for the concept. A hop is any host
+on the way, the device included. An example host may be
+`bastion.example.net`.
 
 **Close-is-cancel**:
-The transport contract that closing the transport is the only way to
-interrupt in-flight reads and writes. Exists because some underlying
-transports (SSH channels) have no deadline support; every cancellation
-path in the library ultimately reduces to a close.
+The transport contract that only closing the transport interrupts a read
+or a write in progress, because SSH channels have no deadlines. Canceling
+an operation's context only abandons the wait for its reply. See
+[ADR 0001](docs/adr/0001-close-is-cancel-transport-contract.md).
 
 ### Testing
 
 **Wire**:
-A test transport running the real framing over in-memory pipes, with the
-device side scripted byte by byte. Used when a test depends on what a
-device actually put on the wire, including bytes outside any message.
+A test transport, `netconftest.Wire`, that runs the real framing over
+in-memory pipes with the device side scripted to the byte, including bytes
+outside any message.
 
 **Conformance suite**:
-The executable contract that certifies a transport implementation against
-the invariants the session depends on (single active reader/writer, EOF
-latch, no cross-message bleed, close-is-cancel).
+`transporttest.Run`, the executable contract of `transport.Transport` that
+every transport implementation must pass. It checks the invariants a
+session depends on, close-is-cancel among them.
 
 **Peer**:
-The scripted device side of a transport under conformance test — it sends
-and receives whole messages, never raw bytes. It can go silent, like a
-device that lost power: the connection stays up and nothing moves on it.
-_Avoid_: server, mock (the peer scripts behaviour, it doesn't assert)
+The scripted device side of a transport under conformance test,
+`transporttest.Peer`. It sends and receives whole messages.
+`transporttest.StreamPeer` can also stall like a device that lost power.
+_Avoid_: server, mock

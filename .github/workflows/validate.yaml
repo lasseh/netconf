@@ -51,6 +51,7 @@ jobs:
       - run: make build build-linux
       - run: make test
       - run: make tidy
+      - run: make docs-check
 
   vulncheck:
     name: Vulnerability Scan

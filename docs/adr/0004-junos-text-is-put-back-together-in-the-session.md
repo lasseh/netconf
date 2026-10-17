@@ -1,46 +1,56 @@
 # Text from a Junos device is put back together in the session
 
-Junos keeps text as bytes and writes every byte above 127 as a character
-reference of its own. "å" loaded as UTF-8 (the bytes C3 A5) comes back as
-`&#195;&#165;` in every format of a configuration, in operational output
-and in error messages (captured from Junos 26.2). An XML parser reads that
-as the two characters "Ã¥", so every value with a letter outside ASCII was
-wrong for every caller.
+Junos keeps text as bytes and writes every byte above 127 as a separate
+character reference. "å", loaded as the UTF-8 bytes C3 A5, comes back as
+`&#195;&#165;` in every configuration format, in operational output
+and in error messages, as captured from Junos 26.2. An XML parser reads
+that as the two characters "Ã¥", so every value with a letter outside
+ASCII was wrong for every caller.
 
-For a device that advertises the Junos capability the session rewrites the
-messages it buffers, replies and notifications: references in a row whose
-bytes are one character in UTF-8 become that character. `Reply.Raw` is the
-rewritten reply.
+For a device that advertises the Junos capability, the session normalizes
+the replies and notifications it buffers. A run of references
+whose bytes form one UTF-8 character becomes that character. `Reply.Raw`
+is the normalized reply.
 
 We preferred this to a fix in the `junos` package, on the way out of
-`GetConfiguration`, `Decode`, `Text` and `JSON`. That would keep the core
-free of anything a vendor does, and leave the wrong text in the calls most
-programs make: `Session.Exec` into a struct, `Reply.Element`, the message
-of an `RPCError`. An `Element` is also a piece of the reply it was found
-in, so the reply has to be right before anything is cut from it.
+`junos.GetConfiguration`, `junos.Decode`, `junos.Text` and `junos.JSON`.
+That fix would keep the core free of vendor-specific code, but it would
+leave the wrong text in the calls most programs make: `Session.Exec` into
+a struct, `Reply.Element`, the message of a `netconf.RPCError`. A
+`netconf.Element` is also a piece of the reply it was found in, so the
+reply has to be right before anything is cut from it.
 
 ## Consequences
 
 - `Reply.Raw` is not byte for byte what a Junos device sent. A reply read
-  with `Session.Stream` is, and so is what the transport records with
-  `DebugCapture`.
-- The core does something on account of a vendor, and names the Junos
-  capability to know when.
-- A reference that is not part of a character in UTF-8 stays as it is.
-  Text that Junos holds in Latin-1 arrives as one reference for each
-  character, which is that character to a parser, and needs no help: Junos
-  stores a `&#229;` that is loaded as the byte E5 and sends `&#229;` back.
-- Latin-1 text is misread where two of its characters are UTF-8 as bytes,
-  an upper-case letter with an accent followed by a sign from the upper
-  half of Latin-1, as in "É»". Junos does not say which encoding a text is
-  in, so there is nothing to tell the two by.
-- Only what Junos writes for a byte is rewritten: `&#`, three decimal
-  digits from 128 to 255 and `;`. Comments, CDATA sections and processing
-  instructions are left alone, as a parser reads no references in them,
-  and so are the bytes of U+FFFE and U+FFFF, which XML cannot hold as
-  characters.
-- The rewrite happens in the buffer the message was read into, and a
-  message without a numeric reference is not gone through at all.
-- No notification from Junos has been looked at. They are rewritten
-  because the session buffers them like replies, and the rewrite does
-  nothing to a message without such references.
+  with `Session.Stream` is, and so is what `transport.Framer.DebugCapture`
+  records.
+- The core has vendor-specific behavior, and checks for the
+  Junos capability to know when.
+- A reference that is not part of a UTF-8 character stays as it is. Text
+  that Junos holds in Latin-1 arrives as one reference per character,
+  which a parser reads as that character, so it needs no help. When
+  `&#229;` is loaded, Junos stores the byte E5 and sends `&#229;` back.
+- Latin-1 text is misread where the bytes of two to four of its characters
+  in a row form one UTF-8 character, as in "É»" or "ã¡¢". Junos does not
+  say which encoding a text is in, so nothing tells the two apart.
+- Only the form Junos writes for a byte is joined: `&#`, three decimal
+  digits from 128 to 255, and `;`. Comments, CDATA sections and processing
+  instructions are left alone, because a parser reads no references in
+  them. The bytes of U+FFFE and U+FFFF are also left alone, because XML
+  cannot hold them as characters.
+- Normalization works in place, in the buffer the message was read into.
+  A message without a numeric reference, `&#`, is not scanned at all.
+- No notification from Junos has been looked at. Notifications are
+  normalized because the session buffers them like replies, and
+  normalization changes nothing in a message without such references.
+
+## Update, 2026-10-17
+
+The consequence "No notification from Junos has been looked at" records
+the evidence at the time of the decision, not its current extent. Junos
+notifications with text outside ASCII have since been captured and
+tested. Integration runs read commit comments from notifications on
+vJunos-router and vJunos-switch 26.2 with their characters intact. See
+[What is verified against Junos](../junos-verified.md) for the platforms,
+test scope and remaining limits. The decision is unchanged.

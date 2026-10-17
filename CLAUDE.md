@@ -2,12 +2,12 @@
 
 ### Issue tracker
 
-Issues and specs live as local markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live as local Markdown under `.scratch/`. A feature gets `.scratch/<feature-slug>/`, and every other ticket goes in `.scratch/worklist/issues/`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five-role vocabulary, recorded as the `Status:` line of each issue file. See `docs/agents/triage-labels.md`.
+The default five triage roles, recorded on the `Status:` line of each issue file except wayfinding tickets. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: the glossary `CONTEXT.md` at the repo root, decisions in `docs/adr/`. When a skill names `GLOSSARY.md`, read and update `CONTEXT.md` instead. Do not create `GLOSSARY.md`. See `docs/agents/domain.md`.

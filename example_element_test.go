@@ -2,6 +2,7 @@ package netconf_test
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +13,53 @@ import (
 	"github.com/lasseh/netconf/junos"
 	ncssh "github.com/lasseh/netconf/transport/ssh"
 )
+
+// A result element can inherit a namespace from a wrapper. Element.Decode
+// preserves that namespace even though the result is decoded on its own.
+func ExampleReply_Element() {
+	reply := &netconf.Reply{Raw: []byte(`<rpc-reply><result xmlns="urn:example:system"><system><name>edge1</name></system></result></rpc-reply>`)}
+	element, err := reply.Element("system")
+	if err != nil {
+		log.Fatal(err)
+	}
+	var system struct {
+		XMLName xml.Name `xml:"urn:example:system system"`
+		Name    string   `xml:"name"`
+	}
+	if err := element.Decode(&system); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(system.Name)
+	// Output: edge1
+}
+
+func ExampleRPCError_Detail() {
+	var rpcErr netconf.RPCError
+	if err := xml.Unmarshal([]byte(`<rpc-error><error-tag>lock-denied</error-tag><error-severity>error</error-severity><error-info><session-id>42</session-id></error-info></rpc-error>`), &rpcErr); err != nil {
+		log.Fatal(err)
+	}
+	holder, found := rpcErr.Detail("session-id")
+	fmt.Println(errors.Is(rpcErr, netconf.ErrLockDenied))
+	fmt.Println(holder, found)
+	// Output:
+	// true
+	// 42 true
+}
+
+func ExampleCapabilitySet_Has() {
+	caps := netconf.NewCapabilitySet(
+		"urn:ietf:params:netconf:capability:candidate:1.0",
+		"urn:ietf:params:netconf:capability:url:1.0?scheme=http,file",
+		"urn:ietf:params:netconf:capability:validate:1.1",
+	)
+	fmt.Println(caps.Has(":candidate:1.0"))
+	fmt.Println(caps.Has(":url:1.0"))
+	fmt.Println(caps.Has(":validate:1.0"))
+	// Output:
+	// true
+	// true
+	// false
+}
 
 // The attributes of an element in a reply.  Junos says on <configuration>
 // when it was committed.

@@ -541,11 +541,19 @@ func (r Rollback) Exec(ctx context.Context, session *netconf.Session) (*netconf.
 // zero value commits the candidate.  The standard <commit> does that too;
 // this one can also check without committing, record a comment and
 // synchronize routing engines.
+//
+// A candidate with nothing to commit is committed all the same: Junos 26.2
+// answers with <ok/> and adds an entry to the commit history, of the 50 it
+// keeps.  Change commits nothing when its load changed nothing.
 type CommitConfiguration struct {
 	// Check validates the candidate and commits nothing.  It is not
 	// without effect on a device where a confirmed commit is pending: Junos
 	// takes a check for the confirmation, from any session, as it takes a
 	// commit.
+	//
+	// A check can be slow: one that failed took more than 30 seconds on an
+	// EX4100 with Junos 25.4.  Allow for that in the deadline of the
+	// context.
 	Check bool
 
 	// Comment is recorded with the commit, where "show system commit" and

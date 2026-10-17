@@ -1,71 +1,137 @@
 # Sessions
 
-A session is safe for concurrent use. `Close` sends `<close-session>` and
-closes the transport. A session also ends when its connection dies:
+This page covers a `netconf.Session` from `netconf.Open` to its end. Read
+it when you write a program that keeps a session open or shares one
+between goroutines.
+
+- [Session lifetime](#session-lifetime)
+- [Options of `netconf.Open`](#options-of-netconfopen)
+- [Requests from several goroutines](#requests-from-several-goroutines)
+- [Tracing](#tracing)
+- [Malformed XML from the device](#malformed-xml-from-the-device)
+- [Notifications](#notifications)
+- [Untrusted devices](#untrusted-devices)
+
+## Session lifetime
+
+`Session.Close` sends `<close-session>`, waits for the reply and closes the
+transport. The session is over when `Close` returns, even with an error.
+`Close` is safe to call more than once and on a session that has already
+ended. Only the first call can return an error. With a streamed reply
+still open, `Close` does not send `<close-session>`, because it could not
+read the reply. `Close` cancels a running notification handler's context
+without waiting for the handler.
+
+A session also ends without `Close`. `Session.Done` returns a channel that
+is closed at session end, and `Session.Err` reports the cause. `Err` is nil
+while the session is alive and when `Close` ended it. Wait on `Done` and on
+your own context in one `select`:
 
 ```go
 select {
+case <-ctx.Done():
+	// shutting down: ctx is over, so close with a fresh context
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := session.Close(closeCtx); err != nil {
+		log.Printf("close: %v", err)
+	}
 case <-session.Done():
 	log.Printf("session ended: %v", session.Err()) // nil after Close
 }
 ```
 
-Operations on an ended session fail with an error matching
-`netconf.ErrClosed`. Combine `Done` with `ncssh.WithKeepalive` to detect dead
-peers in long-running programs and reconnect. A session that the keepalive
-ended says so: `errors.Is(session.Err(), ncssh.ErrKeepalive)`.
+These causes end a session without `Close`:
 
-`netconf.Open` takes these options:
+| Cause | `Session.Err` |
+| --- | --- |
+| The device closes the transport, or a read fails | The transport's error |
+| A write fails partway through | `failed to write message`, wrapping the write error |
+| `ncssh.WithKeepalive` gives up on the device | `ncssh.ErrKeepalive` |
+| A message exceeds `WithMaxMessageSize` | `netconf.ErrMessageTooLarge` |
+| A message stalls longer than `WithMessageTimeout` | `netconf.ErrMessageStalled` |
+| The notification queue is full | `netconf.ErrNotificationOverflow` |
+| [100 skipped messages](#untrusted-devices) in a row | `ignored 100 messages in a row`, with no sentinel |
+
+An operation on a session that ended fails with an error that matches
+`netconf.ErrClosed` and wraps the cause, if any. See
+[Error targets](operations.md#error-targets).
+
+In a long-running program, dial with `ncssh.WithKeepalive`, an option of
+`ncssh.DialHost` only, so that `Done` closes when the device stops
+answering SSH keepalives. To reconnect, see
+[Reconnect without replaying writes](production-use.md#reconnect-without-replaying-writes).
+
+## Options of `netconf.Open`
 
 | Option | Effect |
 | --- | --- |
-| `WithOperationTimeout(d)` | A bound for every operation whose context has no deadline, default none |
-| `WithMaxMessageSize(n)` | The largest message the session accepts, default 256 MiB |
-| `WithMessageTimeout(d)` | How long a message that has begun may go without a byte before the session ends, default for ever; see [Timeouts](operations.md#timeouts) |
-| `WithNotifHandler(fn)` | The function that receives notifications |
-| `WithNotifQueue(q)` | How many notifications may wait for the handler, and what happens to one that does not fit |
-| `WithCapability(caps...)` | The capabilities the client advertises, default base:1.0 and base:1.1 |
-| `WithReplyRepair(fn)` | A function that sees every buffered reply and notification before the session reads it, default none; see [Messages that are not XML](#messages-that-are-not-xml) |
-| `WithTrace(trace)` | Functions that are told of every operation as it starts and ends, and of every notification; see [Tracing](#tracing) |
-| `WithLogger(logger)` | The `slog.Logger` of the session, default `slog.Default()`; nil turns logging off |
+| `WithOperationTimeout(d)` | Bounds every operation whose context has no deadline, default none. See [Timeouts](operations.md#timeouts) |
+| `WithMaxMessageSize(n)` | Largest buffered message, the hello included, default 256 MiB (`DefaultMaxMessageSize`). Zero or less removes the limit. Streamed replies are exempt |
+| `WithMessageTimeout(d)` | Ends the session with `ErrMessageStalled` when a message that has begun goes this long without a byte, default none. See [Stalled messages](operations.md#stalled-messages) |
+| `WithNotifHandler(fn)` | The function that receives notifications, see [Notifications](#notifications) |
+| `WithNotifQueue(q)` | The bounds of the notification queue, and whether overflow ends the session or drops the notification |
+| `WithCapability(caps...)` | The capabilities the client advertises, in place of `DefaultCapabilities`, base:1.0 and base:1.1. Without `CapNetConf10` or `CapNetConf11`, `Open` fails before it sends anything |
+| `WithReplyRepair(fn)` | A function that sees every buffered reply and notification first, default none. See [Malformed XML from the device](#malformed-xml-from-the-device) |
+| `WithTrace(trace)` | Functions called for each operation and notification. See [Tracing](#tracing) |
+| `WithLogger(logger)` | The session's `*slog.Logger`, default `slog.Default()`. A nil logger turns logging off |
 
-The session logs little: at warn level a session that ended without `Close`,
-a message it skipped, and warnings in a reply that `Exec` had no way to
-return.
+The session logs at warn level:
+
+- warnings in the hello, and warnings that `Session.Exec` cannot return
+- each skipped message
+- notifications dropped under `NotifQueue.Drop`, less and less often
+  after the first drop
+- a session end without `Close`
+- a transport that fails to close after `Open` fails
+
+At debug level it logs a late reply to an operation whose caller gave up.
+A record quotes the first warning, or the message-id or element name of a
+skipped message, truncated to 128 bytes. A device warning can quote
+configuration, so pass `WithLogger(nil)` or a logger whose `slog.Handler`
+redacts device text. The transports and the `rpc` and `junos` packages log
+nothing of their own.
 
 ## Requests from several goroutines
 
-Operations issued at the same time are written one behind the other as they
-come, and each reply goes to its operation by its message-id. The device
-then has several requests at once. It carries them out one after the other
-and answers in the order they arrived, which RFC 6241 asks of it in section
-4.5.
+A `netconf.Session` is safe for concurrent use. Concurrent operations are
+written one behind the other, and each reply reaches its operation by
+message-id. RFC 6241, section 4.5, requires the device to process requests
+and reply in the order they arrive.
 
-Over chunked framing to a Junos device the session writes a request only
-when the answer to the one before it has arrived whole. Junos 26.2 ended
-sessions over a request that was written right behind another, see chunked
-framing in [What is verified against Junos](junos-verified.md). The session
-does this by itself where
-both sides advertise `base:1.1` and the device advertises the Junos
-capability. Three things are different on such a session:
+Concurrency safety covers single operations, not a configuration workflow.
+Run one `junos.Change.Apply` at a time per session, see
+[Change safety](junos.md#change-safety).
 
-- A request whose context ends while it waits for its turn is not sent.
-  On another session it is sent, and carried out with nobody waiting for
-  the reply.
-- A request whose caller gave up keeps its turn until its answer has
-  arrived. A request that the device does not answer holds up all that
-  come after it, `<close-session>` included: `Close` then returns an error
-  when its context ends, and the session is over all the same.
-- A reply read with `Stream` has arrived whole when its message is closed.
+Over chunked framing to a Junos device, the session writes one request at a
+time. That applies when both sides advertise `base:1.1` and the device
+advertises the Junos capability, `http://xml.juniper.net/netconf/junos/1.0`.
+Each operation holds a turn from before its request is written until the
+next message that is not a notification has arrived whole, normally its
+reply. vJunos-router 26.2 ended the session when a
+request was written right behind another, see
+[ADR 0006](adr/0006-junos-gets-one-request-at-a-time-over-chunks.md).
+Junos 26.2 advertises `base:1.1` only with both `rfc-compliant` and
+`version-1.1` set under `system services netconf`, see
+[Configuration for chunked framing](junos-verified.md#configuration-for-chunked-framing).
 
-A session opened with `netconf.WithCapability(netconf.CapNetConf10)` speaks
-end-of-message framing to such a device, and writes requests as they come.
+On a session with turns:
+
+- An operation whose context ends while it waits for its turn is not sent.
+- An operation whose caller gave up keeps its turn, so a request the
+  device never answers holds up every request behind it,
+  `<close-session>` included. `Close` then fails when its context ends,
+  and the session is over anyway.
+- A streamed reply keeps the turn until the caller closes its message.
+
+A session opened with `netconf.WithCapability(netconf.CapNetConf10)` uses
+end-of-message framing and has no turns. See
+[Untrusted devices](#untrusted-devices) for the risk.
 
 ## Tracing
 
-The typed operations and `junos.Change.Apply` issue their operations inside
-the library, where no caller can put a timer. `netconf.WithTrace` takes
-functions that the session calls for every operation, in the manner of
+`netconf.WithTrace` gives a session a `*netconf.Trace`, functions the
+session calls for each operation and each notification, in the manner of
 `net/http/httptrace`:
 
 ```go
@@ -82,33 +148,56 @@ trace := &netconf.Trace{
 session, err := netconf.Open(ctx, tr, netconf.WithTrace(trace))
 ```
 
-`OperationStart` is called when an operation is about to be sent and
-`OperationDone` when its reply has arrived or the wait for it has ended,
-once each, with the session-id, the message-id, the name of the operation
-and the request as it is sent. The name is that of the element: a
-`junos.Change` shows as `lock`, `load-configuration`, `get-configuration`
-(the compare), `commit-configuration` and `unlock`. `Notification` is called
-for every notification on its way to the handler, and says whether the queue
-had room for it.
+An operation is reported once its request is encoded. One whose context
+ended before that, or whose request fails to encode, is not.
+`Trace.OperationStart` is called when an operation is about to be sent,
+and `Trace.OperationDone` once for each `OperationStart`, when the reply
+has arrived and been checked for RPC errors or the wait for it ended. Both
+get a `netconf.OperationInfo` with the session-id, message-id,
+operation name, request as sent and start time. `OperationDone` also gets a
+`netconf.OperationResult`:
 
-The functions run on the path of what they report and have to return
-quickly. They must not call `Close` on the session, which would wait for
-itself, and must not panic: to end a session over what a function saw, tell
-another goroutine. The request holds whatever the operation carries, the configuration
-of a load with its secrets included: log it with care. For a reply read with
-`Stream` the duration is the time to the beginning of the reply. Where a
-request waits for its turn, see
-[Requests from several goroutines](#requests-from-several-goroutines),
-`OperationStart` is called before the wait and the wait is part of the
-duration.
+- `Duration` runs from the start to the reply or the end of the wait.
+  It ends where a streamed reply begins, and includes any wait for a turn.
+- `ReplySize` is the reply's size in bytes, 0 when no reply arrived and for
+  a streamed reply.
+- `Err` is the error the wait ended with, the reply's RPC errors, or the
+  `SyntaxError` from the scan for them, see
+  [Malformed XML from the device](#malformed-xml-from-the-device). It does
+  not include an error found later, such as a missing `<ok/>`. A streamed
+  reply is not checked.
 
-## Messages that are not XML
+`Trace.Notification` is called for every notification on its way to the
+handler, with its size in bytes and a `dropped` argument, true when the
+queue had no room or the session is closing.
 
-XML allows no control characters but tab, line feed and carriage return. A
-device that passes on text it does not own, the description an LLDP
-neighbour sends for one, can put such a character into a reply, and then
-nothing reads that reply: every way of decoding it fails. The error says
-where:
+An operation's name is its element name without a prefix, and `Close`
+reports `close-session`. A `junos.Change` committed under the lock reports
+`lock`, `load-configuration`, `get-configuration` for the compare,
+`commit-configuration` and `unlock`. With `Private`, `open-configuration`
+and `close-configuration` replace `lock` and `unlock`. `Confirm` can add a
+second `commit-configuration`, and `DryRun` can replace the commit with
+`get-commit-information` and a `commit-configuration` check. A rollback
+before `unlock` shows as a second `load-configuration`.
+
+The session calls the trace functions synchronously. `Notification` runs
+on the goroutine that reads from the device and holds up every reply
+behind it. Return quickly, and make the functions safe for concurrent
+use. A trace function must not call `Close` on the session, because the
+call can deadlock, so leave that to another goroutine. It must not panic
+either, because the panic can leave the transport open or an unread reply
+that every later operation waits behind.
+
+`OperationInfo.Request` holds whatever the operation carries, such as a
+loaded configuration with its password hashes and keys. Do not change it.
+Log a redacted copy.
+
+## Malformed XML from the device
+
+XML allows no control characters other than tab, line feed and carriage
+return. A device that passes on text from elsewhere, such as an LLDP
+neighbor's description, can put one in a reply. Every way of reading that
+reply then fails with a `*netconf.SyntaxError` that says where:
 
 ```go
 reply := &netconf.Reply{Raw: []byte("<rpc-reply><description>Vendor OS 1.2\x01build 7</description></rpc-reply>")}
@@ -122,23 +211,24 @@ if errors.As(err, &syntaxErr) {
 fmt.Println(err)
 ```
 
-```
+```text
 byte 37 of the reply: "reply><description>Vendor OS 1.2\x01build 7</description></rpc-repl"
 failed to parse <description>: XML syntax error on line 1: illegal character code U+0001 at byte 37
 ```
 
-The text of the error has the place and not the bytes around it: an error
-goes where it is logged, and next to a control character in a
-configuration there may be a password hash. `Around` has them for a
-program that wants to show them. What the parser itself names is still in
-the text: the character it does not allow, or the name of an entity or an
-element it cannot read.
+`SyntaxError.Around` holds up to 32 bytes on either side of the offset.
+The error text leaves those bytes out, because they can hold a password
+hash. It keeps the character or name the parser reports, such as
+`U+0001`.
 
-A reply that the session itself cannot go through for errors comes back
-from `ExecReply` together with that error, so `reply.Raw` has what the
-device sent. The RPC errors in front of where it stops being XML are in
-the error as well: `errors.Is(err, netconf.ErrLockDenied)` still finds a
-lock that was refused.
+`Session.ExecReply` scans a reply for RPC errors only when the reply
+contains the text `rpc-error` or `<xnm:error`. Otherwise it returns a nil
+error even for a reply that is not XML, as does `Session.Exec` with a nil
+`reply` argument, and the `SyntaxError` comes from `Reply.Element`,
+`Reply.Elements` or `Reply.Decode`. When the scan fails, `ExecReply`
+returns the reply with the `SyntaxError`, which also holds the RPC errors
+found before the bad byte, so `errors.Is(err, netconf.ErrLockDenied)`
+still finds a refused lock.
 
 To read such replies, open the session with a repair:
 
@@ -146,27 +236,35 @@ To read such replies, open the session with a repair:
 session, err := netconf.Open(ctx, tr, netconf.WithReplyRepair(netconf.StripInvalidChars))
 ```
 
-`StripInvalidChars` takes out the characters XML does not allow, bytes that
-are not UTF-8 and references to such characters (`&#27;`). `WithReplyRepair`
-takes any function from a message to a message; it sees each reply and
-notification as the device sent it, before the session reads it. Without
-the option no message is changed.
+`netconf.StripInvalidChars` takes out the characters XML does not allow,
+U+FFFE and U+FFFF included, bytes that are not UTF-8, and references to a
+disallowed character, such as `&#27;`, outside a CDATA section.
+`netconf.WithReplyRepair` takes any `func([]byte) []byte`, which sees each
+buffered reply and notification as the device sent it and may change it in
+place. On a device with the Junos capability, the
+[Junos text normalization](junos.md#non-ascii-text) runs after the repair.
+Neither runs on the hello or on a streamed reply.
 
-Junos 26.2 needs none of this for what it holds itself. Loaded with a
-control character in a statement or in the comment of a commit, it sends a
-reference to another character back: `&#167;`, the section sign, in a
-configuration in every format, and `&#xe01b;` for U+001B, a character from
-the private use area, in the output of a command, in a diff and in the
-commit history. That was looked at on vJunos-router, vJunos-switch and
-vJunosEvolved. Text that Junos passes on from a neighbour was not.
+The session skips a message whose start tag it cannot read, before any
+repair, because it needs that tag to tell a reply from a notification. An
+operation waiting for that reply waits until its context ends.
+
+Junos 26.2 sends a control character in a statement of its own
+configuration as `&#167;`, the section sign, so reading that configuration
+needs no repair. See
+[Control characters in statements](junos-verified.md#control-characters-in-statements).
 
 ## Notifications
+
+Give `netconf.Open` a notification handler with `netconf.WithNotifHandler`,
+then subscribe, for example with `rpc.CreateSubscription`:
 
 ```go
 session, err := netconf.Open(ctx, tr,
 	netconf.WithNotifHandler(func(ctx context.Context, msg *netconf.Message) {
 		var notif netconf.Notification
 		if err := msg.Decode(&notif); err != nil {
+			log.Printf("decode notification: %v", err)
 			return
 		}
 		// the content is one element, named for what happened
@@ -186,47 +284,73 @@ session, err := netconf.Open(ctx, tr,
 err = rpc.CreateSubscription{}.Exec(ctx, session)
 ```
 
-The handler has to be there before the subscription, and `Open` is the only
-place to give it. On a session without one `rpc.CreateSubscription` sends
-nothing and fails with `netconf.ErrNoNotifHandler`: the session would skip
-every notification, and end after a hundred of them in a row.
+A session cannot get a handler after `Open`. Without one,
+`rpc.CreateSubscription` sends nothing and fails with
+`netconf.ErrNoNotifHandler`, because the session would skip every
+notification and end after 100 in a row. A subscription sent as literal
+XML is not checked.
 
-The handler is called for one notification at a time, in the order they
-arrive, and may issue operations on the same session. Notifications that
-arrive while it is busy wait in a queue of at most 10,000 notifications or
-64 MiB. When that is full the session ends with
-`netconf.ErrNotificationOverflow`, so a receiver that lost events knows it;
-`netconf.WithNotifQueue` changes the bounds, or drops what does not fit and
-keeps the session.
+The session calls the handler on its own goroutine, one notification at a
+time, in arrival order. The handler may issue operations on the same
+session. Its context is canceled at session end.
 
-Whether the device accepts other operations on a session with a
-subscription is its `:interleave` capability
-(`session.ServerCaps().Has(":interleave:1.0")`); without it, give the
-subscription a session of its own.
+Notifications that arrive while the handler is busy wait in a queue, by
+default up to 10,000 notifications or 64 MiB,
+`netconf.DefaultNotifQueueMessages` and `netconf.DefaultNotifQueueBytes`.
+An empty queue takes one notification above the byte budget. A
+notification that arrives at a full queue ends the session with
+`netconf.ErrNotificationOverflow`. `netconf.WithNotifQueue` changes the
+bounds. With `NotifQueue.Drop` set, the session drops what does not fit,
+logs the loss and stays open.
 
-Junos has notifications with `set system services netconf notification`,
-and what it sends is not the three events its documentation names. Junos
-26.2 sends its system log: every event twice, as a `<syslog>` and as a
-`<state-system-syslog>` element, hundreds of them for one commit, and
-changes of state such as `<oc-nd6-change>` in between. Junos OS Evolved
-26.2 sends changes of state, `<oc-system-state-change>` and the like, and
-nothing about a login or a commit. Both advertise `:interleave` whatever is
-configured, and answer on a session that has a subscription only with
-`notification interleave` set. Without it they answer nothing there,
-`<close-session>` included: an operation waits for its context, and so
-does `Close`.
+The `:interleave` capability says whether a device accepts other operations
+on a session with a subscription. Check it with
+`session.ServerCaps().Has(":interleave:1.0")`, and without it give the
+subscription a session of its own. On Junos, do not rely on it. Junos 26.2
+and Junos OS Evolved 26.2 advertise it whenever notifications are
+configured, but without `notification interleave` they reply to nothing on
+a session with a subscription. See
+[Operations on a subscription session](junos-verified.md#operations-on-a-subscription-session).
+
+vJunos-router 26.2 sends every system log event twice, as `<syslog>` and as
+`<state-system-syslog>`, see
+[Captured replies](junos-verified.md#captured-replies).
+
+For a complete program, see the
+[notification example](../examples/notifications/README.md). For
+reconnects and lost notifications, see
+[Notifications and reconnects](production-use.md#notifications-and-reconnects).
 
 ## Untrusted devices
 
-- Messages are limited to 256 MiB (`netconf.WithMaxMessageSize`); a larger
-  one ends the session with `ErrMessageTooLarge`. Only replies requested
-  with `Stream` are exempt.
-- A session ends after 100 messages in a row that nobody asked for.
-- Base:1.0 framing ends a message at the first `]]>]]>`, wherever it comes
-  from. If a device may return data you do not control, require chunked
-  framing with `netconf.WithCapability(netconf.CapNetConf11)`; the hello
-  exchange then fails against devices that only speak base:1.0.
-- `Framer.DebugCapture` copies whole messages, including any secrets in
-  them.
+A session bounds what a device can make it buffer or wait for, per
+session, not for the whole program.
 
-How to report a vulnerability is in [SECURITY.md](../.github/SECURITY.md).
+- **Message size.** A buffered message over `netconf.WithMaxMessageSize`
+  ends the session with `netconf.ErrMessageTooLarge`,
+  and a hello that large fails `Open`. Nothing limits the size or duration
+  of a reply read with `Session.Stream`.
+- **Notification queue.** A full queue ends the session with
+  `netconf.ErrNotificationOverflow`, unless `netconf.NotifQueue.Drop` is
+  set. See [Notifications](#notifications).
+- **Skipped messages.** A session ends after 100 skipped messages in a row.
+  It skips messages with no XML element or of an unknown kind, replies to
+  no operation, and notifications on a session without a handler. A late
+  reply to an operation whose caller gave up, or a notification dropped
+  under `netconf.NotifQueue.Drop`, resets the count.
+- **Stalled messages.** Without `netconf.WithMessageTimeout`, off by
+  default, a message that begins and then stops holds the session forever.
+  See [Stalled messages](operations.md#stalled-messages).
+- **End-of-message framing.** Under base:1.0, a message ends at the first
+  `]]>]]>`, even inside the data. If a device may return data you do not
+  control, require chunked framing with
+  `netconf.WithCapability(netconf.CapNetConf11)`. `Open` then fails against
+  a device that speaks only base:1.0.
+- **CLI commands.** A `junos.Command` is one line of CLI. Building it from
+  untrusted input lets that input choose the command.
+- **Diagnostics with secrets.** `tr.DebugCapture(in, out)`, called before
+  `Open`, copies every framed message, secrets included. Every transport
+  here embeds it from `transport.Framer`. `netconf.OperationInfo.Request`
+  and `netconf.SyntaxError.Around` hold message bytes as well.
+
+Report a vulnerability as [SECURITY.md](../.github/SECURITY.md) describes.
