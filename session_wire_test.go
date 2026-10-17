@@ -906,7 +906,7 @@ func TestMessageCloseDuringRead(t *testing.T) {
 
 	for _, ch := range []chan error{read, closed} {
 		select {
-		case <-ch:
+		case <-ch: //nolint:errcheck // only that it returns matters here
 		case <-time.After(5 * time.Second):
 			t.Fatal("reader or closer still blocked after the session was closed")
 		}
@@ -1100,7 +1100,7 @@ func TestAwaitStreamTimesAbandonedReply(t *testing.T) {
 	go func() { returned <- sess.awaitStream(req, reader, body) }()
 
 	select {
-	case <-returned:
+	case <-returned: //nolint:errcheck // only that it returns matters here
 	case <-time.After(5 * time.Second):
 		t.Fatal("the receive loop waits for the rest of a reply nobody reads, in spite of the message timeout")
 	}
