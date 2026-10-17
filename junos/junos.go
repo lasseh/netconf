@@ -173,10 +173,11 @@ func Text(reply *netconf.Reply) (string, error) {
 //
 // A request that fails is answered in JSON too: Junos writes most errors
 // into the document, which JSON returns as an error, together with the
-// document for what else is in it.  Some it leaves out.  Junos answers a
-// request for an interface that is not there with a document without data,
-// which cannot be told from a result without data, where Junos OS Evolved
-// writes the error.  Ask in XML when that matters.
+// document for what else is in it.  A warning is written there the same
+// way, and is no error: it stays in the document.  Some errors Junos leaves
+// out.  Junos answers a request for an interface that is not there with a
+// document without data, which cannot be told from a result without data,
+// where Junos OS Evolved writes the error.  Ask in XML when that matters.
 func JSON(reply *netconf.Reply) ([]byte, error) {
 	// the document is the text of the reply itself
 	var body struct {

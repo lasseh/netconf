@@ -10,6 +10,11 @@ import (
 // KillSession represents the `<kill-session>` operation defined in
 // [RFC6241 7.9] for terminating another NETCONF session.
 //
+// Junos 26.2 answers with <ok/>, and the session it ends sees its
+// connection close without a message.  It refuses with "pid must be of mgd"
+// the session-id of a session that has ended, and with invalid-value the
+// session-id of the session that sends the request.
+//
 // [RFC6241 7.9]: https://www.rfc-editor.org/rfc/rfc6241.html#section-7.9
 type KillSession struct {
 	// SessionID is the session to end: another session's
