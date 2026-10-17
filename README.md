@@ -42,8 +42,8 @@ call.
 go get github.com/lasseh/netconf
 ```
 
-Requires Go 1.27 or newer; the `go` directive follows the current Go
-release.
+Requires Go 1.26 or newer, the oldest release `golang.org/x/crypto`
+supports.
 
 ## Quick start
 

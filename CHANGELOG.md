@@ -9,6 +9,7 @@ First release line of the fork of `nemith.io/netconf` at commit `e745332`.
 ### Changed
 
 - Module path is `github.com/lasseh/netconf`.
+- Requires Go 1.26 or newer; upstream requires 1.25.
 - `NewSession(transport, ...)` is `Open(ctx, transport, ...)`. The context
   bounds and cancels the hello exchange, so one deadline covers connecting
   and opening a session; without a deadline 30 seconds apply.
