@@ -1,6 +1,6 @@
 module github.com/lasseh/netconf
 
-go 1.27.0
+go 1.26.0
 
 require (
 	github.com/carlmjohnson/be v0.25.2
