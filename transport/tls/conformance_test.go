@@ -30,7 +30,7 @@ func TestTransportConformance(t *testing.T) {
 			close(release)
 			_ = srv.listener.Close()
 			select {
-			case <-srv.errCh:
+			case <-srv.errCh: //nolint:errcheck // waits for the server to finish, its error is not under test
 			case <-time.After(5 * time.Second):
 			}
 		})
