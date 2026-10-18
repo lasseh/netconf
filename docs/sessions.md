@@ -292,7 +292,11 @@ XML is not checked.
 
 The session calls the handler on its own goroutine, one notification at a
 time, in arrival order. The handler may issue operations on the same
-session. Its context is canceled at session end.
+session. It is given to `Open` before there is a session, so it loads the
+session from where the program stores it once `Open` has returned, such as
+an `atomic.Pointer`, see the `WithNotifHandler` example. The device has to
+take operations on a session with a subscription, see `:interleave` below.
+The handler's context is canceled at session end.
 
 Notifications that arrive while the handler is busy wait in a queue, by
 default up to 10,000 notifications or 64 MiB,
