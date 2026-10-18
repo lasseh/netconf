@@ -503,7 +503,28 @@ func (r *gapReader) Read(p []byte) (int, error) {
 // done the work, so its silence sits behind the first hundred or so bytes
 // and is the time the request took.  With commits allowed the test times
 // one: that is the request a bound has to be longer than.
+//
+// The line break Junos writes behind a reply begins the next message, so
+// whatever the test waits for between two requests would count as silence
+// inside the next reply.  Nothing is waited for once the measured session is
+// open.
 func TestMessageTimeout(t *testing.T) {
+	// A session that is left alone is not one whose message has stopped.
+	// Junos writes a line break behind every message, the hello included,
+	// which is the first byte of the next message to the framing and must
+	// not start the clock: with a bound of three seconds a session has to be
+	// there after seven.
+	idleCtx, idleTr := dialSSH(t)
+	idle, err := open(idleCtx, idleTr, netconf.WithMessageTimeout(3*time.Second))
+	be.NilErr(t, err)
+	time.Sleep(7 * time.Second)
+	select {
+	case <-idle.Done():
+		t.Errorf("a session that was left alone has ended: %v", idle.Err())
+	default:
+	}
+	be.NilErr(t, idle.Close(testCtx(t)))
+
 	ctx, tr := dialSSH(t)
 	gaps := &gapTransport{Transport: tr}
 	session, err := open(ctx, gaps, netconf.WithMessageTimeout(messageTimeout))
@@ -530,22 +551,6 @@ func TestMessageTimeout(t *testing.T) {
 		_, err := rpc.GetConfig{Source: rpc.Running}.Exec(ctx, session)
 		return err
 	})
-
-	// A session that is left alone is not one whose message has stopped.
-	// Junos writes a line break behind every message, the hello included,
-	// which is the first byte of the next message to the framing and must
-	// not start the clock: with a bound of three seconds a session has to be
-	// there after seven.
-	idleCtx, idleTr := dialSSH(t)
-	idle, err := open(idleCtx, idleTr, netconf.WithMessageTimeout(3*time.Second))
-	be.NilErr(t, err)
-	time.Sleep(7 * time.Second)
-	select {
-	case <-idle.Done():
-		t.Errorf("a session that was left alone has ended: %v", idle.Err())
-	default:
-	}
-	be.NilErr(t, idle.Close(testCtx(t)))
 
 	if os.Getenv("NETCONF_DUT_FLAVOR") != "junos" {
 		return
