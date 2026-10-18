@@ -39,7 +39,10 @@ type HelloError struct {
 
 func (e *HelloError) Error() string {
 	var b strings.Builder
-	b.WriteString(ErrHello.Error() + ": " + e.Err.Error())
+	b.WriteString(ErrHello.Error())
+	if e.Err != nil {
+		b.WriteString(": " + e.Err.Error())
+	}
 	for i := range e.RPCErrors {
 		b.WriteString("; " + e.RPCErrors[i].Error())
 	}
