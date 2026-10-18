@@ -156,6 +156,12 @@ func TestHelloError(t *testing.T) {
 		be.Equal(t, 0, len(failed(t, err).Capabilities))
 	})
 
+	t.Run("made by hand without a cause", func(t *testing.T) {
+		err := &HelloError{Text: "login:"}
+		be.Equal(t, `netconf: hello exchange failed; the device said: "login:"`, err.Error())
+		be.True(t, errors.Is(err, ErrHello))
+	})
+
 	// What a wrong port and a device without NETCONF look like: somebody
 	// took the connection and hung up.
 	t.Run("the connection ends before a hello", func(t *testing.T) {

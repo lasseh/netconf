@@ -54,9 +54,26 @@ func expandCapability(s string) string {
 // CapabilitySet is the set of capabilities advertised by one peer.
 type CapabilitySet struct {
 	caps map[string]struct{}
-	// uris holds every capability without its parameters, so a capability
-	// can be found without knowing the values the peer attached to it
+	// uris holds every capability without its parameters, and also without
+	// its version, so a capability can be found without knowing the values
+	// the peer attached to it or the version it speaks
 	uris map[string]struct{}
+}
+
+// cutVersion returns uri without a version at its end: ":validate" for
+// ":validate:1.1".  A uri that does not end in a version is returned as it
+// is, with false.
+func cutVersion(uri string) (string, bool) {
+	i := strings.LastIndexByte(uri, ':')
+	if i < 0 {
+		return uri, false
+	}
+	version := uri[i+1:]
+	if version == "" || version[0] < '0' || version[0] > '9' ||
+		strings.Trim(version, "0123456789.") != "" {
+		return uri, false
+	}
+	return uri[:i], true
 }
 
 // NewCapabilitySet creates a new CapabilitySet and adds any provided
@@ -74,6 +91,9 @@ func NewCapabilitySet(capabilities ...string) CapabilitySet {
 		cs.caps[c] = struct{}{}
 		uri, _, _ := strings.Cut(c, "?")
 		cs.uris[uri] = struct{}{}
+		if bare, ok := cutVersion(uri); ok {
+			cs.uris[bare] = struct{}{}
+		}
 	}
 	return cs
 }
@@ -98,6 +118,11 @@ func (cs CapabilitySet) All() iter.Seq[string] {
 // Has will return true if the capability is present in the set.  The given
 // capability may be given in short form, without the standard prefix:
 // ":candidate:1.0".
+//
+// A capability given without a version, ":validate", matches any version
+// the peer advertised, ":validate:1.0" or ":validate:1.1"; one given with a
+// version matches that version only.  The same goes for the base
+// capability: "urn:ietf:params:netconf:base" matches either base version.
 //
 // Capabilities may carry parameters (for example
 // ":url:1.0?scheme=http,ftp,file").  A capability given without parameters

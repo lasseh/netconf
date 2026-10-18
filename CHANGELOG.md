@@ -118,7 +118,9 @@ at commit `e745332`. Each entry describes how the fork differs from
   `errors.As`.
 - Given a capability without parameters, `CapabilitySet.Has` matches
   whatever parameters the device advertised with it. Given one with
-  parameters, it requires an exact match.
+  parameters, it requires an exact match. Given a capability without a
+  version, such as `:validate`, it matches any version the device
+  advertised.
 - `rpc.EditConfig` and `rpc.SubtreeFilter` marshal a struct payload as a
   child element. Its fields used to replace the wrapper element.
   `rpc.EditConfig` without a config fails to encode.
