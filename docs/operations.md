@@ -281,7 +281,7 @@ enclosing elements, so struct tags can match by namespace.
 A reply whose XML declaration names an encoding other than UTF-8,
 `us-ascii` included, reaches the caller, and decoding it fails:
 `encoding/xml` refuses such a declaration without a `CharsetReader`, and
-the library sets none. `Reply.Raw` has the bytes as they came.
+the library sets none. `Reply.Raw` still holds the reply.
 
 ## Timeouts
 
