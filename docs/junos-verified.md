@@ -432,7 +432,8 @@ framings, with a request written in pieces.
 The chunk writer of package `transport` keeps clear of both limits for
 every device. It writes no chunk larger than 4096 bytes, and it keeps the
 end-of-chunks marker clear of every multiple of 4096 bytes into the
-message.
+message. It hands the transport 32768 bytes at a time, a multiple of 4096,
+so every write also ends on a multiple of 4096 bytes of the message.
 
 ### Two requests written together
 
@@ -460,9 +461,10 @@ says what it means for callers.
 | --- | --- | --- |
 | An earlier writer that sent each message as one chunk | vJunos-router 26.2 | Every test, including commits and notifications, over several runs rather than one. |
 | The same writer | vJunos-switch 26.2, vJunosEvolved 26.2 | The tests that commit nothing. Three tests have not run there. |
-| The current writer | vJunos-router 26.2 | Requests of every size around 4096, 8192 and 65536 bytes, in 15 runs of 15, where the earlier writer failed 3 runs of 12. `TestRequestSizes` at each of the three boundaries on the wire, in 13 runs of 13. Nine more suite tests, as dry runs. |
-| The current writer | netopeer2 | The whole suite. |
-| The current writer and the turn | vJunos-router 26.2 | 27 tests, all but the commit tests and the notification test, with commits not enabled and notifications not configured. 240 pairs of requests from two goroutines, all answered. |
+| The current chunks, one write per chunk | vJunos-router 26.2 | Requests of every size around 4096, 8192 and 65536 bytes, in 15 runs of 15, where the earlier writer failed 3 runs of 12. `TestRequestSizes` at each of the three boundaries on the wire, in 13 runs of 13. Nine more suite tests, as dry runs. |
+| The same, with the turn | vJunos-router 26.2 | 27 tests, all but the commit tests and the notification test, with commits not enabled and notifications not configured. 240 pairs of requests from two goroutines, all answered. |
+| The current writer: the same chunks in writes of 32768 bytes, with the turn | vJunos-router 26.2 | On 2026-10-12, on code from before the review fixes of 2026-10-14: `TestRequestSizes` in 31 runs of 31, and 5496 pairs of requests from two goroutines answered. In one run of 24 pairs, neither request of one pair was answered within the five minutes of the test. The cause is not known: the path to the lab stalled at other times that day, and it did not happen again. |
+| The current writer | netopeer2 | The whole suite, in CI on every push. |
 
 Of the sizes around 4096, 8192 and 65536 bytes, only those around 4096 put
 the end-of-chunks marker on a boundary on the wire, where the chunk headers
