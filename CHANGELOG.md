@@ -161,7 +161,7 @@ at commit `e745332`. Each entry describes how the fork differs from
 
 ### Added
 
-- `ncssh.DialHost` connects the way the OpenSSH client does, with options
+- `ncssh.DialHost` connects much as the OpenSSH client does, with options
   for key files, the ssh-agent, a password, an SSH config file,
   `known_hosts` files and an SSH keepalive. Key files, signers and the
   keys of the agent are offered in one go. The context bounds the whole
