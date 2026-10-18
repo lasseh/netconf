@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/carlmjohnson/be"
@@ -254,6 +256,36 @@ func TestCloseWithUnclosedStream(t *testing.T) {
 
 	_, err = io.ReadAll(msg)
 	be.True(t, errors.Is(err, ErrClosed))
+}
+
+// Close bounds itself with DefaultCloseTimeout when its context has no
+// deadline: a device that takes close-session and never answers it holds
+// Close that long, and no longer.
+func TestCloseDefaultTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		wire, dev := netconftest.NewWire(t)
+		go func() {
+			if _, err := dev.Recv(); err != nil {
+				return
+			}
+			if err := dev.WriteRaw(wireHello); err != nil {
+				return
+			}
+			for {
+				if _, err := dev.Recv(); err != nil {
+					return
+				}
+			}
+		}()
+
+		sess, err := Open(context.Background(), wire, WithLogger(slog.New(slog.DiscardHandler)))
+		be.NilErr(t, err)
+
+		start := time.Now()
+		err = sess.Close(context.Background())
+		be.True(t, errors.Is(err, context.DeadlineExceeded))
+		be.Equal(t, DefaultCloseTimeout, time.Since(start))
+	})
 }
 
 // The stream wait must also end when the receiver's context fired first and
@@ -1013,6 +1045,45 @@ func TestMalformedChunkEndsSession(t *testing.T) {
 		be.True(t, errors.Is(err, ErrClosed))
 		waitDone(t, sess)
 		be.True(t, errors.Is(sess.Err(), transport.ErrMalformedChunk))
+	}
+}
+
+// A chunk may end anywhere in a message, the start tag of <rpc-reply> and
+// its message-id included.  The device cuts every reply in two at another
+// byte of its start tag, and every operation gets its reply.
+func TestReplyStartTagAcrossChunks(t *testing.T) {
+	chunk := func(s string) string { return "\n#" + strconv.Itoa(len(s)) + "\n" + s }
+
+	cuts := make(chan int, 1)
+	wire, dev := netconftest.NewWire(t)
+	go func() {
+		if _, err := dev.Recv(); err != nil {
+			return
+		}
+		_ = dev.WriteRaw(wireHello11)
+		dev.Upgrade()
+		for {
+			req, err := dev.Recv()
+			if err != nil {
+				return
+			}
+			reply := netconftest.OKReply(netconftest.ExtractMessageID(req))
+			cut := <-cuts
+			if err := dev.WriteRaw(chunk(reply[:cut]) + chunk(reply[cut:]) + "\n##\n"); err != nil {
+				return
+			}
+		}
+	}()
+
+	sess, err := Open(context.Background(), wire, WithLogger(slog.New(slog.DiscardHandler)))
+	be.NilErr(t, err)
+
+	startTag := strings.Index(netconftest.OKReply("100"), ">") + 1
+	for cut := 1; cut <= startTag; cut++ {
+		cuts <- cut
+		reply, err := sess.ExecReply(testCtx(t), "<get/>")
+		be.NilErr(t, err)
+		be.In(t, "<ok/>", string(reply.Raw))
 	}
 }
 
