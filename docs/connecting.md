@@ -111,7 +111,8 @@ All keys go to the device in one public key attempt, in this order:
 signers, key files, then the agent's keys. The password follows, as
 password authentication and then over keyboard-interactive, where it
 answers one hidden prompt, once. A device that asks for more, such as a
-second factor, fails the login with `ncssh.ErrAuth`.
+second factor, fails the login with `ncssh.ErrAuth`. There is no login
+over a console or telnet.
 
 An agent that waits, such as for a touch, holds the dial until its context
 ends. `ncssh` offers every key the agent lists, hardware token keys such
@@ -152,7 +153,9 @@ from each host's block:
 - `IdentityFile`, for the device unless a password, key file or signer is
   given. A leading `~` is expanded. A file that is missing or does not
   parse is skipped, as is a path with a token such as `%h`.
-- `UserKnownHostsFile`, unless `ncssh.WithKnownHosts` is given.
+- `UserKnownHostsFile`, unless `ncssh.WithKnownHosts` is given. A leading
+  `~` is expanded. A token such as `%d` and an environment variable such
+  as `${HOME}` are not.
 - `ProxyJump`, for the device unless `ncssh.WithProxyJump` is given.
 - `Port`, for jump hosts only. The SSH config names the login port, so the
   port of the device comes from `ncssh.WithPort`.
@@ -378,6 +381,10 @@ unknown key and an unknown user all end in `ErrAuth`, and Junos does not
 say which it was. The key and algorithm errors come from
 `golang.org/x/crypto/ssh` and its `knownhosts` package.
 
+With the netconf subsystem, what the device writes to standard error is
+read and dropped, and the exit status of the subsystem is not kept, so no
+error of the transport has either.
+
 The hello exchange in `netconf.Open` can fail after the dial succeeded,
 with an error that matches `netconf.ErrHello`:
 
@@ -435,6 +442,11 @@ existing `*ssh.Client` and leaves it to the caller. Closing that transport
 releases everything waiting on it and closes its SSH channel. On a device
 that has stopped answering, the channel goes only with the connection, so
 a goroutine stays until the caller closes the client.
+
+`WithKeepalive` is an option of `DialHost` only. With `ncssh.NewTransport`
+the program owns the `*ssh.Client` and can send its own keepalive, a
+`keepalive@openssh.com` request with `SendRequest` on a timer, and close
+the client when it goes unanswered. `ncssh.Dial` has no keepalive.
 
 ## Writing a transport
 

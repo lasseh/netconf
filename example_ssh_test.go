@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -125,6 +126,53 @@ func ExampleSession_Done() {
 		panic(err)
 	}
 	log.Print(version)
+}
+
+// A notification handler that issues operations on its own session.  The
+// handler is given to Open, before there is a session, so it loads the
+// session from where the program stores it once Open has returned.
+// Notifications come only after the subscription, and by then it is there.
+func ExampleWithNotifHandler() {
+	ctx := context.Background()
+
+	transport, err := ncssh.DialHost(ctx, "myrouter.example.com")
+	if err != nil {
+		panic(err)
+	}
+
+	var current atomic.Pointer[netconf.Session]
+	session, err := netconf.Open(ctx, transport,
+		netconf.WithNotifHandler(func(ctx context.Context, msg *netconf.Message) {
+			var notif netconf.Notification
+			if err := msg.Decode(&notif); err != nil {
+				log.Print(err)
+				return
+			}
+			if notif.Content.XMLName.Local != "netconf-config-change" {
+				return
+			}
+			config, err := rpc.GetConfig{Source: rpc.Running}.Exec(ctx, current.Load())
+			if err != nil {
+				log.Print(err)
+				return
+			}
+			log.Printf("the configuration is %d bytes now", len(config))
+		}),
+	)
+	if err != nil {
+		panic(err)
+	}
+	current.Store(session)
+
+	// operations on a session with a subscription need :interleave, and on
+	// Junos `notification interleave` in its configuration as well
+	if !session.ServerCaps().Has(":interleave") {
+		panic("the device cannot take operations on a session with a subscription")
+	}
+	if err := (rpc.CreateSubscription{}).Exec(ctx, session); err != nil {
+		panic(err)
+	}
+	<-session.Done()
 }
 
 // A bound for the operations of a session, and more time for the one that

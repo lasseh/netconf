@@ -235,7 +235,10 @@ as that literal. See
 
 - Run one `junos.Change.Apply` at a time per session, and send no other
   configuration writes on that session while it runs. Junos reserves the
-  candidate for the session, not for the call.
+  candidate for the session, not for the call. Reads from other goroutines
+  can run alongside, and changes that must run at the same time need
+  sessions of their own. The `SharedSession` example of `junos.Change`
+  shows reads in parallel next to changes one after the other.
 - Do not combine `Private` with `Confirm`, or set `Verify` without
   `Confirm`. `Apply` refuses both before it reserves the candidate.
 - Let `Verify` read through the session, but never commit or run a commit

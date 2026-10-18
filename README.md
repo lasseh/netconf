@@ -28,9 +28,11 @@ change in one call.
 - **Junos.** `junos.GetConfiguration` reads the configuration as XML, text,
   set commands or JSON. `junos.Command` runs CLI commands, `junos.Decode`
   finds a result at any depth, and `junos.Change` makes a whole change.
-- **Connects the way OpenSSH does.** `ncssh.DialHost` checks `known_hosts`
-  and logs in with the ssh-agent or key files. Options add jump hosts, the
-  SSH config and a keepalive. See [Connecting](docs/connecting.md).
+- **Connects much like OpenSSH.** `ncssh.DialHost` checks `known_hosts`
+  and logs in with the ssh-agent or key files. Options add jump hosts, part
+  of the SSH config and a keepalive. For what it does not do, such as
+  `ProxyCommand`, `nccmd.Start` runs the system `ssh`. See
+  [Connecting](docs/connecting.md).
 - **Bounded against a misbehaving device.** A session ends after 100
   [skipped messages](docs/sessions.md#untrusted-devices) in a row and, by
   default, on a buffered message over 256 MiB or a full notification queue.
@@ -104,7 +106,8 @@ func run() error {
 method carries it out in one call. `Apply` locks the candidate, or opens a
 private copy when `Private` is set. It then loads, compares and commits.
 It releases the candidate however the change ends, or reports why it could
-not. With `Confirm` set, `Apply` makes a confirmed commit and confirms it.
+not. When the release fails, the candidate stays reserved until the
+session is closed. With `Confirm` set, `Apply` makes a confirmed commit and confirms it.
 If `Apply` does not confirm it, Junos goes back to the previous configuration
 after the `Confirm` time runs out. Inside a function that returns an error,
 with `ctx` and an open `session`:
