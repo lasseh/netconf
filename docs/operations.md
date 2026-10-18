@@ -278,6 +278,11 @@ wherever the reply declares it. Junos declares `junos` on the
 enclosing elements, so struct tags can match by namespace.
 `reply.Element("rpc-reply")` returns the envelope and its `Attr`.
 
+A reply whose XML declaration names an encoding other than UTF-8,
+`us-ascii` included, reaches the caller, and decoding it fails:
+`encoding/xml` refuses such a declaration without a `CharsetReader`, and
+the library sets none. `Reply.Raw` has the bytes as they came.
+
 ## Timeouts
 
 `ncssh.DialHost`, `nctls.Dial`, `netconf.Open`, every operation and

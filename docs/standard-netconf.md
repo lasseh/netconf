@@ -81,7 +81,9 @@ as `<configuration><system><services/></system></configuration>`. Junos
 `rfc-compliant`.
 
 A filter that matches nothing, such as one in a namespace the device does
-not implement, can return empty data instead of an error.
+not implement, can return empty data instead of an error. That is the
+answer of RFC 6241. A device may refuse a filter for an element it has no
+model for instead: netopeer2 answers it with `operation-failed`.
 
 `rpc.XPathFilter(path, namespaces)` builds an XPath filter. Junos 26.2
 does not advertise `:xpath:1.0`. Declare every prefix the path uses in
