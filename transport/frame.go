@@ -40,7 +40,7 @@ func NewFramer(r io.Reader, w io.Writer) *Framer {
 		r:  r,
 		w:  w,
 		br: bufio.NewReader(r),
-		bw: bufio.NewWriterSize(w, endBlock),
+		bw: bufio.NewWriterSize(w, writeBlock),
 	}
 }
 
@@ -66,7 +66,7 @@ func (f *Framer) DebugCapture(input, output io.Writer) {
 	}
 
 	if output != nil {
-		f.bw = bufio.NewWriterSize(io.MultiWriter(f.w, output), endBlock)
+		f.bw = bufio.NewWriterSize(io.MultiWriter(f.w, output), writeBlock)
 	}
 }
 
@@ -446,10 +446,16 @@ func (w *chunkedWriter) Close() error {
 }
 
 // endBlock is the size of the blocks that the end of the chunks is kept
-// whole in.  It is the size of the write buffer of a Framer, so that a
-// write to the transport ends on a multiple of it, and the read buffer of
-// Junos is a multiple of it.
+// whole in.  The read buffer of Junos is a multiple of it, and so is
+// writeBlock, so that a write to the transport ends on a multiple of it.
 const endBlock = 4096
+
+// writeBlock is the size of the write buffer of a Framer: what is written to
+// the transport at once.  A message in chunks goes out in blocks of this
+// size, and each of them ends on a multiple of endBlock bytes of the
+// message.  It is the largest packet that OpenSSH and x/crypto/ssh take by
+// default, so that one write is one packet there.
+const writeBlock = 8 * endBlock
 
 const endOfMsgStr = "]]>]]>"
 

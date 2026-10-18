@@ -285,6 +285,43 @@ func TestChunkWriterSplits(t *testing.T) {
 	be.Equal(t, string(msg), string(got))
 }
 
+// writeSizes notes the size of every write it gets.
+type writeSizes []int
+
+func (w *writeSizes) Write(p []byte) (int, error) {
+	*w = append(*w, len(p))
+	return len(p), nil
+}
+
+// A message in chunks goes to the transport in blocks of writeBlock bytes,
+// however small its chunks are: a write per chunk is a packet per chunk over
+// ssh.  Every block ends on a multiple of endBlock bytes of the message,
+// which is where the end of the chunks is kept clear of.
+func TestChunkWriterWrites(t *testing.T) {
+	var writes writeSizes
+	f := NewFramer(strings.NewReader(""), &writes)
+	f.Upgrade()
+
+	const size = 1 << 20
+	w, err := f.MsgWriter()
+	be.NilErr(t, err)
+	_, err = w.Write(make([]byte, size))
+	be.NilErr(t, err)
+	be.NilErr(t, w.Close())
+
+	be.Equal(t, 0, writeBlock%endBlock)
+	total := 0
+	for i, n := range writes {
+		total += n
+		if i < len(writes)-1 {
+			be.Equal(t, writeBlock, n)
+		}
+	}
+	// the message, a header for each of its chunks and the end of them
+	be.True(t, total > size)
+	be.Equal(t, total/writeBlock+1, len(writes))
+}
+
 // The end of the chunks is kept clear of a multiple of 4096 bytes, counted
 // from the beginning of the message.  A device reads a message in blocks,
 // and Junos 26.2 does not find the end when one of its blocks ends inside

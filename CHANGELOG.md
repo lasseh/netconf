@@ -86,7 +86,9 @@ at commit `e745332`. Each entry describes how the fork differs from
   the writer sends the last byte of the message in a chunk of its own.
   `nemith.io/netconf` wrote one chunk for each write. Junos 26.2 ends the
   session when it receives a chunk of 9800 bytes, and misses an
-  end-of-chunks marker that one of its reads splits in two.
+  end-of-chunks marker that one of its reads splits in two. The chunks
+  go to the transport in writes of 32768 bytes, a multiple of 4096, not
+  one write per chunk.
 - Over chunked framing to a device that advertises the Junos capability,
   the session writes a request only after the reply to the previous one
   has arrived whole. On every other session, requests from several
