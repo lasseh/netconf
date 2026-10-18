@@ -36,7 +36,8 @@ type Trace struct {
 	OperationDone func(OperationInfo, OperationResult)
 
 	// Notification is called for a notification that is on its way to the
-	// handler, with its size in bytes.  dropped says that it was thrown
+	// handler, with its size in bytes: when it is queued, not when the
+	// handler runs.  dropped says that it was thrown
 	// away: the queue of the handler had no room for it, see WithNotifQueue,
 	// or the session is closing.  A session without a handler reports none.
 	Notification func(size int, dropped bool)

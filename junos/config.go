@@ -661,6 +661,10 @@ func (op CommitConfiguration) MarshalXML(e *xml.Encoder, _ xml.StartElement) err
 // lists what is wrong with it, each statement with its place.  The reply
 // carries the warnings of a commit that went through.
 //
+// An error of the context does not say whether Junos committed: the context
+// may have ended after the request was sent.  Change.Apply returns
+// ErrCommitUnknown for that case.
+//
 // Junos answers a commit that went through with <ok/>, and Exec fails
 // without it.  That is what tells of a private copy that no longer fits:
 // when somebody else has committed another value for a statement the copy

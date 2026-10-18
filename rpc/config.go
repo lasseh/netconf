@@ -211,7 +211,9 @@ const (
 )
 
 // ErrorOption defines the behavior when an error is encountered during a
-// `<edit-config>` operation.
+// `<edit-config>` operation.  The constants are the values of RFC 6241.
+// Junos documents stop-on-error, its default, and ignore-error, which RFC
+// 6241 does not have: give that one as ErrorOption("ignore-error").
 type ErrorOption string
 
 const (
@@ -598,7 +600,8 @@ func (rpc Commit) MarshalXML(e *xml.Encoder, _ xml.StartElement) error {
 }
 
 // Exec issues the operation on session.  It fails unless the server answers
-// with <ok/>.
+// with <ok/>.  An error of the context does not say whether the device
+// committed: the context may have ended after the request was sent.
 func (rpc Commit) Exec(ctx context.Context, session *netconf.Session) error {
 	return ExecOK(ctx, session, rpc, "commit")
 }
