@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lasseh/netconf"
@@ -74,6 +75,40 @@ func ExampleChange_dryRun() {
 		log.Fatal(err)
 	}
 	fmt.Println(result.Diff)
+}
+
+// One session for reads from several goroutines and for changes.  Junos
+// reserves the candidate for the session, not for one Apply, so the changes
+// go one after the other, here from one goroutine while the others read.
+// Changes that have to run at the same time each need a session of their
+// own.
+func ExampleChange_sharedSession() {
+	var session *netconf.Session // from netconf.Open
+	ctx := context.Background()
+
+	var reads sync.WaitGroup
+	for _, name := range []string{"ge-0/0/0", "ge-0/0/1"} {
+		reads.Go(func() {
+			out, err := junos.Command("show interfaces terse "+name).Exec(ctx, session)
+			if err != nil {
+				log.Print(err)
+				return
+			}
+			fmt.Println(out)
+		})
+	}
+
+	for _, server := range []string{"192.0.2.1", "192.0.2.2"} {
+		_, err := junos.Change{
+			Format: junos.FormatSet,
+			Config: "set system ntp server " + server,
+		}.Apply(ctx, session)
+		if err != nil {
+			log.Print(err)
+			break
+		}
+	}
+	reads.Wait()
 }
 
 // A change that is committed only when a function of yours agrees with what
