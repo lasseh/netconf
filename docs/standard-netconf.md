@@ -43,8 +43,9 @@ if !session.ServerCaps().Has(":candidate:1.0") {
 `CapabilitySet.Has` takes a short name under
 `urn:ietf:params:netconf:capability:`, such as `:candidate:1.0`, and
 `netconf.CapNetConf10` or `netconf.CapNetConf11` for the base versions.
-Each version is a capability of its own, so check both versions of
-`:validate` when either will do.
+Given a name without a version, such as `:validate`, `Has` matches any
+version the device advertised. Given a version, it matches that version
+only.
 
 Given a name without parameters, `Has` matches any parameters. Given
 parameters, it needs the exact advertised string, so

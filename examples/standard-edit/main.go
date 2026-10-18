@@ -37,7 +37,7 @@ func main() {
 // or commit outcomes. Do not turn this into an automatic retry loop.
 func editCandidate(ctx context.Context, session *netconf.Session, config []byte) (err error) {
 	caps := session.ServerCaps()
-	if !caps.Has(":candidate:1.0") || (!caps.Has(":validate:1.0") && !caps.Has(":validate:1.1")) {
+	if !caps.Has(":candidate:1.0") || !caps.Has(":validate") {
 		return errors.New("this example requires candidate and validate capabilities")
 	}
 	if err := (rpc.Lock{Target: rpc.Candidate}).Exec(ctx, session); err != nil {
