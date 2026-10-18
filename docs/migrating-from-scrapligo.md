@@ -4,6 +4,16 @@ Read this page when you port code from scrapligo's NETCONF driver,
 `github.com/scrapli/scrapligo/driver/netconf`. Each section maps scrapligo
 v1.3.3 calls to this library and lists the differences.
 
+The page covers scrapligo v1, the module `github.com/scrapli/scrapligo`.
+scrapligo v2, the module `github.com/scrapli/scrapligo/v2`, has another
+API, which these tables do not map: `netconf.NewNetconf` and `Open(ctx)`,
+a context on every operation, a `*netconf.Result` for every reply, and
+notifications read one at a time with `GetNextNotification`. It runs on
+libscrapli, a native library that it loads at run time, by default after
+downloading it on first use, and only on Linux and macOS, on amd64 and
+arm64. That was v2.0.2. The library's side of each table applies to a port
+from v2 as well.
+
 scrapligo's driver package is also named `netconf`, so import one under
 an alias. In the tables, `options` and `opoptions` are scrapligo's
 `driver/options` and `driver/opoptions`.
