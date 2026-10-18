@@ -33,6 +33,10 @@ type testServer struct {
 	// which then gets no answer: a server that stops answering right there.
 	SubsystemAsked chan struct{}
 
+	// SubsystemAnswered, when set, is closed once the request for a
+	// subsystem has its answer.
+	SubsystemAnswered chan struct{}
+
 	// RejectExec makes the server say no to a command.
 	RejectExec bool
 
@@ -161,6 +165,9 @@ func (s *testServer) serve(conn net.Conn, handler func(ssh.Channel) error) {
 						s.t.Logf("failed to reply to subsystem req: %v", err)
 					}
 					note()
+					if s.SubsystemAnswered != nil {
+						close(s.SubsystemAnswered)
+					}
 				case "exec":
 					if err := req.Reply(!s.RejectExec, nil); err != nil {
 						s.t.Logf("failed to reply to exec req: %v", err)
@@ -279,4 +286,67 @@ func TestTransport_Dial_SubsystemFails(t *testing.T) {
 
 	// Ensure the server finishes cleanly (client should close connection on error)
 	be.NilErr(t, srv.Wait(t))
+}
+
+// A refused subsystem leaves nothing open on a client that stays: the channel
+// NewTransport opened for it is closed again.  The server reads the channel
+// until the client closes it.
+func TestNewTransport_SubsystemRefusedClosesChannel(t *testing.T) {
+	srv := newTestServer(t)
+	srv.RejectSubsystem = true
+	srv.Serve(func(ch ssh.Channel) error {
+		_, err := io.ReadAll(ch)
+		return err
+	})
+
+	client, err := ssh.Dial("tcp", srv.Addr(), &ssh.ClientConfig{HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+	be.NilErr(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	tr, err := NewTransport(client)
+	be.True(t, errors.Is(err, ErrSubsystemRefused))
+	be.Zero(t, tr)
+	be.NilErr(t, recvWithin(t, srv.errCh, "the server to see the channel closed"))
+}
+
+// A context that ends just as the dial succeeds: the dial either returns a
+// transport that works, or fails with the error of the context and closes
+// its connection.  It never returns a transport whose connection the end of
+// the context has closed.
+func TestTransport_DialContextEndsAfterSubsystem(t *testing.T) {
+	failed := 0
+	for i := range 20 {
+		srv := newTestServer(t)
+		srv.SubsystemAnswered = make(chan struct{})
+		srv.Serve(func(ch ssh.Channel) error {
+			_, err := io.ReadAll(ch)
+			return err
+		})
+
+		ctx, cancel := context.WithCancel(t.Context())
+		// the end of the context moves through the window, a little
+		// later each time
+		go func() {
+			<-srv.SubsystemAnswered
+			time.Sleep(time.Duration(i) * 20 * time.Microsecond)
+			cancel()
+		}()
+
+		tr, err := Dial(ctx, "tcp", srv.Addr(), &ssh.ClientConfig{HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+		if err != nil {
+			be.True(t, errors.Is(err, context.Canceled))
+			be.Zero(t, tr)
+			failed++
+		} else {
+			w, err := tr.MsgWriter()
+			be.NilErr(t, err)
+			_, err = io.WriteString(w, "<hello/>")
+			be.NilErr(t, err)
+			be.NilErr(t, w.Close())
+			be.NilErr(t, tr.Close())
+		}
+		be.NilErr(t, recvWithin(t, srv.errCh, "the server to see the connection closed"))
+		cancel()
+	}
+	t.Logf("%d of 20 dials failed with the context", failed)
 }
