@@ -19,7 +19,7 @@ var ErrStreamBusy = errors.New("transport: stream is already active")
 // will move from End-of-Message to Chunked framing after the `Upgrade` method
 // has been called.
 //
-// This is not a transport on it's own (missing the `Close` method) and is
+// This is not a transport on its own (missing the `Close` method) and is
 // intended to be embedded into other transports.
 type Framer struct {
 	r io.Reader
@@ -44,8 +44,8 @@ func NewFramer(r io.Reader, w io.Writer) *Framer {
 	}
 }
 
-// DebugCapture will copy all *framed* input/output to the the given
-// `io.Writers` for sent or recv data.  Either sent of recv can be nil to not
+// DebugCapture will copy all *framed* input/output to the given
+// `io.Writers` for sent or recv data.  Either sent or recv can be nil to not
 // capture any data.  Useful for displaying to a screen or capturing to a file
 // for debugging.
 //

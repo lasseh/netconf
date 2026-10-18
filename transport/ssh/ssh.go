@@ -359,7 +359,7 @@ func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transpor
 		return nil, fmt.Errorf("ssh: failed to ask the device to run %q: %w", command, err)
 	case err != nil:
 		_ = sess.Close()
-		return nil, fmt.Errorf("failed to start netconf ssh subsytem: %w", err)
+		return nil, fmt.Errorf("failed to start netconf ssh subsystem: %w", err)
 	case !ok && command != "":
 		_ = sess.Close()
 		return nil, fmt.Errorf("ssh: the device refused to run %q", command)
