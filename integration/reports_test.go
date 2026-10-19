@@ -190,7 +190,7 @@ func TestJunosStandardConfirmedCommit(t *testing.T) {
 	// in effect, and waiting for the three minutes it was given
 	newest := commits(ctx, t, other)[0]
 	be.True(t, newest.Pending)
-	be.Equal(t, "commit confirmed, rollback in 3mins", newest.Note)
+	be.Equal(t, "commit confirmed, rollback in 3mins", ownNote(newest.Note))
 	be.In(t, value, activeProbe(ctx, t, other))
 
 	if first.ServerCaps().Has(":confirmed-commit:1.1") {
@@ -227,7 +227,7 @@ func TestJunosStandardConfirmedCommit(t *testing.T) {
 	be.NilErr(t, err)
 	newest = commits(ctx, t, other)[0]
 	be.False(t, newest.Pending)
-	be.Equal(t, "commit confirmed, rollback in 3mins", newest.Note)
+	be.Equal(t, "commit confirmed, rollback in 3mins", ownNote(newest.Note))
 	be.In(t, value, activeProbe(ctx, t, other))
 }
 
