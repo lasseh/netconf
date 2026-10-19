@@ -1414,6 +1414,17 @@ func commitPending(t *testing.T, session *netconf.Session) bool {
 	return len(history) > 0 && history[0].Pending
 }
 
+// ownNote returns what Junos notes on a commit, without what it adds where
+// the device has `system commit synchronize`.  An EX4600 on 21.4R3 noted
+// "commit synchronize" on a commit that has no note otherwise, and added
+// " synchronize" to the note of a confirmed commit.
+func ownNote(note string) string {
+	if note == "commit synchronize" {
+		return ""
+	}
+	return strings.TrimSuffix(note, " synchronize")
+}
+
 // skipIfCommitPending skips a test that has Junos check a commit when a
 // confirmed commit is pending, see commitPending.
 func skipIfCommitPending(t *testing.T, session *netconf.Session) {
@@ -1630,7 +1641,7 @@ func TestJunosCommitUnknown(t *testing.T) {
 		commit := found(t, token)
 		be.Equal(t, 0, commit.Sequence)
 		be.False(t, commit.Pending)
-		be.Equal(t, "", commit.Note)
+		be.Equal(t, "", ownNote(commit.Note))
 		// the newest entry is what the device runs
 		be.In(t, value, activeProbe(ctx, t, other))
 	})
