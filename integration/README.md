@@ -50,7 +50,7 @@ make integration-test TESTFLAGS=-run=TestJunosCommitCheck
 | `NETCONF_DUT_COMMAND` | Run every session over this command, see [Running over system OpenSSH](#running-over-system-openssh). |
 | `NETCONF_DUT_FLAVOR` | `junos` or `netopeer2` adds the tests of that flavor, see [What runs](#what-runs). Any other value, such as `eos` or `confd` in the compose files, runs only the tests for every device. |
 | `NETCONF_DUT_CHANGE_DRYRUN` | Set to anything to also run the tests that load configuration and commit nothing. |
-| `NETCONF_DUT_CHANGE_COMMIT` | Set to anything to also run the tests that commit. For a lab device only. |
+| `NETCONF_DUT_CHANGE_COMMIT` | Set to anything to also run the tests that commit. Only for a device where that is allowed, see [The probe group and the commit history](#the-probe-group-and-the-commit-history). |
 | `NETCONF_DUT_TRACE` | Set to anything to log every message, see [Tracing](#tracing). |
 | `NETCONF_DUT_YANG` | Directory where `TestJunosSchema` keeps the two YANG modules it reads off a Junos device, for `make junos-schema JUNOS_YANG_MORE=<dir>`. |
 
@@ -117,14 +117,21 @@ tests commit a probe group. On Junos it is the configuration group
 `netconf-lib-probe`, which nothing applies. On netopeer2 it is an
 access-control group of that name with a user that does not exist.
 
+Two Junos tests make the device do more than store the group. The
+`commit full` of `TestJunosChangeCommitFull` and the two commits of
+`TestJunosEphemeral` to the ephemeral database made an SRX300 on Junos
+25.4 reload `named`, and its packet forwarding engine log
+`patricia_add failed` for an internal interface, which stayed up.
+
 A test that commits fails without touching an existing probe group,
 because the test did not create it. A run that was cut short leaves the
 group behind. On Junos, `delete groups netconf-lib-probe` takes it out.
 
 Each run of the commit gate adds the commits in the table above to the
 commit history. Junos 26.2 keeps the 50 newest, see
-[Commit history](../docs/junos.md#commit-history). Run the commit gate on
-a lab device only.
+[Commit history](../docs/junos.md#commit-history). Run the commit gate
+only on a device where the probe group may be committed and the oldest
+commits may drop out of the history.
 
 `make integration-test` gives `go test` a 30-minute timeout instead of its
 default 10, because the tests that commit wait on the device for minutes
@@ -201,7 +208,11 @@ With `NETCONF_DUT_FLAVOR=junos`:
 - `TestGetConfigSubtreeFilter` checks that a subtree filter returns that
   subtree, not the whole configuration.
 - `TestMessageTimeout` also logs the longest silence inside replies in XML,
-  text, set and JSON, and inside a commit check.
+  text, set and JSON, and inside a commit check. Together with its
+  `<get-config>`, that reads the whole configuration five times in a row.
+  On an MX204 whose DDoS protection for `tcp-flags` was lowered to 1000
+  packets a second, those reads went over the limit for 4 seconds, and the
+  device dropped 43 packets.
 
 ### netopeer2 flavor
 
