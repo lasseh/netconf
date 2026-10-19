@@ -39,14 +39,19 @@ jobs:
       - run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
       - run: make actionlint
 
+  # The two Go releases the README says are supported.
   test:
-    name: Unit Tests
+    name: Unit Tests (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [oldstable, stable]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          go-version: ${{ matrix.go }}
       - run: go install gotest.tools/gotestsum@latest
       - run: make build build-linux
       - run: make test

@@ -173,7 +173,7 @@ The API is pre-1.0 and no version is tagged, so `go get` resolves a
 pseudo-version of the latest commit on `main`. Exported names can change,
 and [CHANGELOG.md](CHANGELOG.md) records each change. Until v1.0.0, any new
 version can change them. The supported Go releases are the two newest,
-which are the ones the Go project supports, and CI builds with the newest.
+which are the ones the Go project supports, and CI tests with both.
 
 - Unit tests run with the race detector. Framing, the receive path and
   reply parsing have fuzz targets. Every transport passes the conformance
