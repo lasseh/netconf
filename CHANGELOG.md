@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## v0.1.0 - 2026-10-19
+
 These changes make up the first release of the fork of `nemith.io/netconf`
 at commit `e745332`. Each entry describes how the fork differs from
 `nemith.io/netconf` at that commit.

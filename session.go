@@ -63,7 +63,9 @@ const maxSkippedMessages = 100
 // operations issued from multiple goroutines are written one at a time and
 // correlated to their replies by message-id.  Over chunked framing to a
 // Junos device an operation is written when the one before it has been
-// answered, see send.
+// answered, so a request the device never answers holds up every request
+// behind it, and an operation whose context ends before its turn is not
+// sent.
 type Session struct {
 	tr        transport.Transport
 	sessionID uint64
