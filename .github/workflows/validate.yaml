@@ -39,19 +39,25 @@ jobs:
       - run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
       - run: make actionlint
 
-  # The two Go releases the README says are supported.
+  # The Go that go.mod requires, the oldest a caller can build with, and the
+  # newest.
   test:
     name: Unit Tests (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        go: [oldstable, stable]
+        include:
+          - go: from go.mod
+            go-version-file: go.mod
+          - go: stable
+            go-version: stable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
       - run: go install gotest.tools/gotestsum@latest
       - run: make build build-linux
       - run: make test
