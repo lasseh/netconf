@@ -160,7 +160,7 @@ func ExampleDecode() {
 
 // Two refusals that Junos has no error tag for: a request the login class
 // of the user does not permit, and one the platform does not have.
-func ExampleErrPermissionDenied() {
+func Example_refusals() {
 	var session *netconf.Session // from netconf.Open
 	ctx := context.Background()
 
