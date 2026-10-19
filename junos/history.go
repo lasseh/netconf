@@ -37,9 +37,9 @@ type Commit struct {
 	Comment string
 
 	// Note is what Junos says about the commit by itself.  On a confirmed
-	// commit that is "commit confirmed, rollback in 5mins", with the time it
-	// was given, and it stays when the commit has been confirmed: Pending is
-	// what tells whether it still waits.
+	// commit it reads like "commit confirmed, rollback in 5mins", with the
+	// time it was given, and it stays when the commit has been confirmed:
+	// Pending is what tells whether it still waits.
 	Note string
 
 	// Pending says that this is a confirmed commit that still waits for its
