@@ -1382,9 +1382,14 @@ func changeCtx(t *testing.T) context.Context {
 // probe returns a value for the probe group that no run had before, so that
 // loading it always is a change, and the set command that loads it.
 func probe() (value, config string) {
-	value = "run-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	value = "run-" + strconv.FormatInt(probes.Add(1), 36) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	return value, "set groups " + probeGroup + " system location building " + value
 }
+
+// probes numbers the values of probe, so that two calls in a row differ
+// where the clock does not: on macOS 95 in 100 such pairs read the same
+// time.  The number comes first, so that no value is a part of another.
+var probes atomic.Int64
 
 // activeProbe returns the probe group as the device runs it, as set
 // commands, and nothing when it is not there.
