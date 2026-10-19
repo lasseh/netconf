@@ -194,7 +194,10 @@ With `NETCONF_DUT_FLAVOR=junos`:
   candidate, which the suite treats as a commit check on Junos.
 - `TestJunosCommitCommentLimit` checks the 512-byte limit on commit
   comments with commit checks at 512 and 513 bytes, and at 256 and 257
-  two-byte letters.
+  two-byte letters. It leaves the two-byte letters out before Junos 23.4:
+  Junos 21.4R3-S9.5 never answers a commit check whose comment has 78 or
+  more of them, and keeps the session until another session ends it with
+  `<kill-session>`.
 - `TestGetConfigSubtreeFilter` checks that a subtree filter returns that
   subtree, not the whole configuration.
 - `TestMessageTimeout` also logs the longest silence inside replies in XML,

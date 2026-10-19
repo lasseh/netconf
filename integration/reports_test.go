@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -346,11 +347,31 @@ func TestJunosCommitCommentLimit(t *testing.T) {
 
 	be.NilErr(t, check(strings.Repeat("x", 512)))
 	refused(t, check(strings.Repeat("x", 513)), "513")
-	// a letter of two bytes counts twice
-	be.NilErr(t, check(strings.Repeat("å", 256)))
-	refused(t, check(strings.Repeat("å", 257)), "514")
+	// A letter of two bytes counts twice.  Junos 21.4R3-S9.5 never answers
+	// a commit check whose comment has 78 or more of them, and keeps the
+	// session after the client has gone, so the test sends none to a
+	// release older than 23.4, the oldest seen to answer.
+	if junosBefore(ctx, t, session, 23, 4) {
+		t.Log("Junos before 23.4: no comments of two-byte letters are sent")
+	} else {
+		be.NilErr(t, check(strings.Repeat("å", 256)))
+		refused(t, check(strings.Repeat("å", 257)), "514")
+	}
 
 	_, err := junos.CommitConfiguration{Check: true, Comment: strings.Repeat("x", 513)}.Exec(ctx, session)
 	be.Nonzero(t, err)
 	be.In(t, "the comment is 513 bytes long, and Junos takes 512", err.Error())
+}
+
+// junosBefore reports whether the device runs a Junos release older than
+// major.minor.  A version it cannot read counts as newer.
+func junosBefore(ctx context.Context, t *testing.T, session *netconf.Session, major, minor int) bool {
+	t.Helper()
+	info, err := junos.GetSystemInformation{}.Exec(ctx, session)
+	be.NilErr(t, err)
+	var gotMajor, gotMinor int
+	if _, err := fmt.Sscanf(info.Version, "%d.%d", &gotMajor, &gotMinor); err != nil {
+		return false
+	}
+	return gotMajor < major || gotMajor == major && gotMinor < minor
 }
