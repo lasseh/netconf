@@ -170,9 +170,8 @@ The API reference, with examples, is on
 
 ## Status
 
-The API is pre-1.0 and no version is tagged, so `go get` resolves a
-pseudo-version of the latest commit on `main`. Exported names can change,
-and [CHANGELOG.md](CHANGELOG.md) records each change. Until v1.0.0, any new
+The API is pre-1.0. Exported names can change, and
+[CHANGELOG.md](CHANGELOG.md) records each change. Until v1.0.0, any new
 version can change them. The supported Go releases are the two newest,
 which are the ones the Go project supports. CI tests with the release
 that go.mod requires and with the newest.
