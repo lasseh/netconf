@@ -11,10 +11,11 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lasseh/netconf.svg)](https://pkg.go.dev/github.com/lasseh/netconf)
 [![Validate](https://github.com/lasseh/netconf/actions/workflows/validate.yaml/badge.svg?branch=main&event=push)](https://github.com/lasseh/netconf/actions/workflows/validate.yaml)
 
-A NETCONF client library for Go, built for Juniper devices. It runs RFC 6241
-sessions over SSH and TLS with the standard operations and notifications,
-and adds the Junos-native operations, including a whole configuration
-change in one call.
+A modern NETCONF client library for Go, with first-class Junos support. The
+session and the standard operations and notifications follow RFC 6241 over
+SSH and TLS, and are not tied to a vendor. Package `junos` adds the
+Junos-native operations, including a whole configuration change in one
+call.
 
 - **Context deadlines.** Dialing over SSH or TLS, the hello exchange, every
   operation and `Session.Close` take a `context.Context`. A timed-out
