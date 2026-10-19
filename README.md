@@ -11,10 +11,11 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lasseh/netconf.svg)](https://pkg.go.dev/github.com/lasseh/netconf)
 [![Validate](https://github.com/lasseh/netconf/actions/workflows/validate.yaml/badge.svg?branch=main&event=push)](https://github.com/lasseh/netconf/actions/workflows/validate.yaml)
 
-A NETCONF client library for Go, built for Juniper devices. It runs RFC 6241
-sessions over SSH and TLS with the standard operations and notifications,
-and adds the Junos-native operations, including a whole configuration
-change in one call.
+A modern NETCONF client library for Go, with first-class Junos support. The
+session and the standard operations and notifications follow RFC 6241 over
+SSH and TLS, and are not tied to a vendor. Package `junos` adds the
+Junos-native operations, including a whole configuration change in one
+call.
 
 - **Context deadlines.** Dialing over SSH or TLS, the hello exchange, every
   operation and `Session.Close` take a `context.Context`. A timed-out
@@ -173,7 +174,8 @@ The API is pre-1.0 and no version is tagged, so `go get` resolves a
 pseudo-version of the latest commit on `main`. Exported names can change,
 and [CHANGELOG.md](CHANGELOG.md) records each change. Until v1.0.0, any new
 version can change them. The supported Go releases are the two newest,
-which are the ones the Go project supports, and CI builds with the newest.
+which are the ones the Go project supports. CI tests with the release
+that go.mod requires and with the newest.
 
 - Unit tests run with the race detector. Framing, the receive path and
   reply parsing have fuzz targets. Every transport passes the conformance
