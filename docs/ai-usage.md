@@ -154,7 +154,12 @@ func (t *pipeTransport) Close() error { return t.conn.Close() }
 3. The client's hello advertises `base:1.1`. When the scripted hello does
    too, call `peer.Upgrade()` after `peer.Recv` returns, or the peer never
    reads the next request, which uses chunked framing.
-4. Script the reply to `<close-session>`, or `Session.Close` waits until
+4. Give each scripted `<rpc-reply>` the NETCONF namespace,
+   `urn:ietf:params:xml:ns:netconf:base:1.0`, and the `message-id` of the
+   request it answers. The session skips a reply that lacks one of them,
+   see [Untrusted devices](sessions.md#untrusted-devices), and the
+   operation waits until its context ends.
+5. Script the reply to `<close-session>`, or `Session.Close` waits until
    its context ends, or 30 seconds without a deadline.
 
 ## Report what you verified
