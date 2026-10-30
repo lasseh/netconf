@@ -859,6 +859,13 @@ statement not found
 
 	be.NilErr(t, sess.Exec(testCtx(t), "<commit/>", nil))
 	be.AllEqual(t, []string{"operation succeeded with warnings"}, logs.Records())
+
+	// rpc.ExecOK takes the reply this way, so that its warnings are logged
+	var whole Reply
+	be.NilErr(t, sess.Exec(testCtx(t), "<commit/>", &whole))
+	be.Equal(t, 1, len(whole.Warnings))
+	be.In(t, "<ok/>", string(whole.Raw))
+	be.Equal(t, 2, len(logs.Records()))
 }
 
 // A timeout computed from a deadline goes negative once the budget is spent.

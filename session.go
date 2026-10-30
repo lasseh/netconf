@@ -746,6 +746,8 @@ func (s *Session) exec(ctx context.Context, op any, internal bool) (*Reply, erro
 // a pointer at `reply`. The Reply must include the full <rpc-reply> structure.
 // See ExecReply for how op is encoded and RPC errors are reported.
 //
+// A *Reply as reply gets the reply as it is, warnings included.
+//
 // Exec has nowhere to return warnings, so it logs that there were some.  Use
 // ExecReply to get them.
 func (s *Session) Exec(ctx context.Context, op, reply any) error {
@@ -758,7 +760,11 @@ func (s *Session) Exec(ctx context.Context, op, reply any) error {
 			"count", len(r.Warnings),
 			"first", logValue(strings.TrimSpace(r.Warnings[0].Message)))
 	}
-	if reply == nil {
+	switch into := reply.(type) {
+	case nil:
+		return nil
+	case *Reply:
+		*into = *r
 		return nil
 	}
 	return r.Decode(reply)

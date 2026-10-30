@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/internal/ack"
 	"github.com/lasseh/netconf/internal/operr"
 	"github.com/lasseh/netconf/internal/xmlutil"
 )
@@ -451,20 +452,8 @@ func (op LoadConfiguration) Exec(ctx context.Context, session *netconf.Session) 
 	return execOK(ctx, session, op, "load-configuration")
 }
 
-// execOK issues a load or a commit and holds Junos to the <ok/> with which it
-// answers one that it carried out.  A reply without it is not always an
-// error to Junos: a commit from a private copy that no longer fits the
-// configuration, because somebody else committed in the meantime, is
-// answered with a warning for each statement and a count of them, and
-// commits nothing.
-//
-// The count is what makes such a reply a refusal.  The error then holds the
-// warnings as netconf.RPCErrors, like the error of an operation that Junos
-// rejects.  A reply with warnings and no count has not been seen from a
-// device and says nothing certain, so its error holds their text only.
-//
-// The reply is read to its end for the <ok/>.  One that stops being XML
-// behind it says nothing certain either, and fails with where it stops.
+// execOK issues a load or a commit, holds Junos to its <ok/>, see ack.Check,
+// and returns the reply, whose warnings are the caller's to see.
 //
 // name is the name of the operation, which every error begins with.
 func execOK(ctx context.Context, session *netconf.Session, op any, name string) (*netconf.Reply, error) {
@@ -473,24 +462,7 @@ func execOK(ctx context.Context, session *netconf.Session, op any, name string) 
 		return reply, operr.Named(name, err)
 	}
 
-	oks, err := reply.Elements("ok")
-	switch {
-	case err != nil:
-		return reply, operr.Named(name, err)
-	case len(oks) > 0:
-		return reply, nil
-	}
-	err = fmt.Errorf("%w: <ok>", netconf.ErrElementNotFound)
-	_, counted := reply.Element("load-error-count")
-	switch {
-	case len(reply.Warnings) == 0:
-	case counted == nil:
-		err = fmt.Errorf("%w: %w", err, reply.Warnings)
-	default:
-		// the text, not the errors: this is no refusal
-		err = fmt.Errorf("%w: %s", err, reply.Warnings.Error())
-	}
-	return reply, operr.Named(name, err)
+	return reply, ack.Check(reply, name)
 }
 
 // LoadRescue loads the rescue configuration into the candidate, the one that

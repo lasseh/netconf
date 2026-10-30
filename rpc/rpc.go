@@ -21,9 +21,9 @@ package rpc
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
 	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/internal/ack"
 	"github.com/lasseh/netconf/internal/operr"
 )
 
@@ -33,39 +33,14 @@ import (
 //
 // The <ok/> counts wherever it is in the reply: RFC6241 puts it directly
 // under <rpc-reply>, Junos nests it in <load-configuration-results>.  name
-// is the operation's name, which every error it returns begins with.
+// is the operation's name, which every error it returns begins with.  The
+// error of a reply without it holds the warnings of the reply.
 func ExecOK(ctx context.Context, session *netconf.Session, op any, name string) error {
-	var ok okAnywhere
-	if err := session.Exec(ctx, op, &ok); err != nil {
+	var reply netconf.Reply
+	if err := session.Exec(ctx, op, &reply); err != nil {
 		return operr.Named(name, err)
 	}
-	if !ok {
-		return operr.Named(name, fmt.Errorf("%w: <ok>", netconf.ErrElementNotFound))
-	}
-	return nil
-}
-
-// okAnywhere decodes a reply into whether it holds an <ok> element, at any
-// depth.
-type okAnywhere bool
-
-func (o *okAnywhere) UnmarshalXML(d *xml.Decoder, _ xml.StartElement) error {
-	for depth := 1; depth > 0; {
-		tok, err := d.Token()
-		if err != nil {
-			return err
-		}
-		switch tok := tok.(type) {
-		case xml.StartElement:
-			depth++
-			if tok.Name.Local == "ok" {
-				*o = true
-			}
-		case xml.EndElement:
-			depth--
-		}
-	}
-	return nil
+	return ack.Check(&reply, name)
 }
 
 // ExtantBool is a boolean carried by the presence of an empty element, such

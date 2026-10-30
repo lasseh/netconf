@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- The `rpc` operations and `rpc.ExecOK` read the `<ok/>` the way the
+  `junos` operations do. Without one, the error holds the warnings of the
+  reply, and with a `load-error-count` it matches `netconf.RPCErrors`.
+- `Session.Exec` takes a `*netconf.Reply` as its reply, and fills it in as
+  it is.
+
 ### Fixed
 
 - A message that a Junos device sends unasked over chunked framing lets
