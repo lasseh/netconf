@@ -28,6 +28,22 @@ in every firewall on the path. Give the account a login class that permits
 only what the program needs. On Junos, an operation that the login class
 does not permit fails with `junos.ErrPermissionDenied`.
 
+A read-only account on Junos can use this login class:
+
+```text
+set system login class netconf-ro permissions view-configuration
+set system login class netconf-ro allow-commands "^(show|set cli screen-length|set cli screen-width)"
+set system login class netconf-ro deny-commands "^(clear|file|load|monitor|op|request|save|set|start|test)"
+set system login user automation class netconf-ro
+```
+
+Keep the `^` at the start of both patterns. Without it, a `deny-commands`
+pattern can also refuse `<close-session>`: `(op)` does on vJunos-router
+26.2R1.7. `Session.Close` then returns an error that matches
+`junos.ErrPermissionDenied`, although the session still ends. The `set cli`
+entries are for CLI tools that share the account. The library does not send
+them.
+
 For a jump host or a Junos device without the NETCONF service, see
 [Jump hosts](connecting.md#jump-hosts) and
 [A device without a NETCONF service](connecting.md#a-device-without-a-netconf-service).
