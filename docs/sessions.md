@@ -123,6 +123,8 @@ On a session with turns:
   `<close-session>` included. `Close` then fails when its context ends,
   and the session is over anyway.
 - A streamed reply keeps the turn until the caller closes its message.
+- A message the device sends unasked ends the turn, so one request can go
+  early. The reply to the request that lost its turn ends no turn.
 
 A session opened with `netconf.WithCapability(netconf.CapNetConf10)` uses
 end-of-message framing and has no turns. See

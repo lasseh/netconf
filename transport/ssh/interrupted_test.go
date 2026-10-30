@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/internal/msgio"
 )
 
 // silent listens for one connection and says nothing on it, like a host
@@ -284,7 +285,7 @@ func TestKeepalive_LeavesTheEndOfAMessage(t *testing.T) {
 	tr := &Transport{}
 	tr.gaveUp.Store(&gaveUp)
 
-	got, err := io.ReadAll(msgReader{io.NopCloser(strings.NewReader("hi")), tr})
+	got, err := io.ReadAll(msgio.Reader(io.NopCloser(strings.NewReader("hi")), tr.because))
 	be.NilErr(t, err)
 	be.Equal(t, "hi", string(got))
 }

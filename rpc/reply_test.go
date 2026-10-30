@@ -124,6 +124,30 @@ func TestCreateSubscription_ValidatedWhenEncoded(t *testing.T) {
 // <ok/> counts wherever the device puts it: directly in the reply by the
 // RFC, inside the result element for a Junos <load-configuration>.
 func TestExecOK(t *testing.T) {
+	const warning = `<rpc-error><error-severity>warning</error-severity><error-message>statement not found</error-message></rpc-error>`
+
+	t.Run("warnings beside the ok fail nothing", func(t *testing.T) {
+		err := ExecOK(t.Context(), mockSession(t, warning+`<ok/>`), "<commit/>", "commit")
+		be.NilErr(t, err)
+	})
+
+	// what Junos answers a commit with that it did not carry out
+	t.Run("warnings and a count without an ok are a refusal", func(t *testing.T) {
+		err := ExecOK(t.Context(), mockSession(t, `<load-error-count>1</load-error-count>`+warning), "<commit/>", "commit")
+		be.True(t, errors.Is(err, netconf.ErrElementNotFound))
+		var refused netconf.RPCErrors
+		be.True(t, errors.As(err, &refused))
+		be.Equal(t, "statement not found", refused[0].Message)
+	})
+
+	t.Run("warnings without an ok say why in the error", func(t *testing.T) {
+		err := ExecOK(t.Context(), mockSession(t, warning), "<commit/>", "commit")
+		be.True(t, errors.Is(err, netconf.ErrElementNotFound))
+		be.In(t, "statement not found", err.Error())
+		var refused netconf.RPCErrors
+		be.False(t, errors.As(err, &refused))
+	})
+
 	tests := []struct {
 		name  string
 		reply string

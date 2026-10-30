@@ -121,7 +121,9 @@ Warnings never fail an operation.
 | `Session.Exec`, `rpc.PartialLock` and the `rpc` operations answered with `<ok/>` | Logged at warn level, see `netconf.WithLogger` |
 | `rpc.Get`, `rpc.GetConfig` and every other `junos` operation | Dropped |
 
-To see a typed operation's warnings, give it to `Session.ExecReply`.
+To see a typed operation's warnings, give it to `Session.ExecReply`. The
+error of an `rpc` operation whose reply has no `<ok/>` holds the warnings of
+the reply.
 
 ### Junos errors
 

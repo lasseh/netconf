@@ -65,7 +65,6 @@ func (s *Session) recvMsg() (delivered bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	r.quiet, r.stalled = s.msgTimeout, s.stalled
 	// What is no notification is taken for the answer to an operation, a
 	// message that nobody can read included: a session that waited for a
 	// better one would send nothing more.
@@ -77,27 +76,13 @@ func (s *Session) recvMsg() (delivered bool, err error) {
 			delivered, err = false, fmt.Errorf("failed to drain message: %w", closeErr)
 		}
 		// all of the answer has arrived: the next operation may go, see send
-		if answer {
+		if answer && s.replies.turnOver() {
 			s.endTurn()
 		}
 	}()
 
-	// Decode just far enough to see what kind of message this is, keeping
-	// every byte the decoder consumed in head so the message can still be
-	// delivered whole.  What comes before the start element is buffered
-	// whatever becomes of the message, hence the tighter limit.
-	r.setLimit(maxStartSize)
-	if s.maxMessageSize >= 0 {
-		r.setLimit(min(maxStartSize, s.maxMessageSize))
-	}
-	head := new(bytes.Buffer)
-	peel := xml.NewDecoder(io.TeeReader(r, head))
-	// Only the start element is looked at here, and its name is ASCII
-	// whatever encoding the message declares.
-	peel.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
-
-	start, err := startElement(peel)
-	r.setLimit(s.maxMessageSize)
+	// Decode just far enough to see what kind of message this is.
+	start, err := r.start()
 
 	var syntaxErr *xml.SyntaxError
 	switch {
@@ -114,10 +99,10 @@ func (s *Session) recvMsg() (delivered bool, err error) {
 
 	switch start.Name {
 	case rpcReplyName:
-		return s.recvReply(start, head, r)
+		return s.recvReply(start, r)
 	case notificationName:
 		answer = false
-		return s.recvNotification(start, head, r)
+		return s.recvNotification(start, r)
 	default:
 		// An unknown message must not kill the session; closing the reader
 		// drains the frame so the stream stays aligned.
@@ -162,9 +147,8 @@ func getMessageID(attrs []xml.Attr) string {
 	return ""
 }
 
-// recvReply delivers an rpc-reply to the operation waiting for it.  head
-// holds the part of the message already read from body.
-func (s *Session) recvReply(start *xml.StartElement, head *bytes.Buffer, body *boundedReader) (bool, error) {
+// recvReply delivers an rpc-reply to the operation waiting for it.
+func (s *Session) recvReply(start *xml.StartElement, body *boundedReader) (bool, error) {
 	msgID := getMessageID(start.Attr)
 
 	req, late := s.replies.resolve(msgID)
@@ -188,30 +172,21 @@ func (s *Session) recvReply(start *xml.StartElement, head *bytes.Buffer, body *b
 	if !req.stream {
 		// Buffer the reply so the receive loop never waits on the caller;
 		// an abandoned reply is simply dropped.
-		if _, err := head.ReadFrom(body); err != nil {
-			return false, fmt.Errorf("failed to read rpc-reply: %w", err)
+		whole, err := body.whole("rpc-reply")
+		if err != nil {
+			return false, err
 		}
-		// all of it has arrived: what is done with it is not its silence
-		if body.untimed() {
-			return false, s.errStalled()
-		}
-		msg.body = s.buffered(head.Bytes())
+		msg.body = whole
 		msg.reader = io.NopCloser(bytes.NewReader(msg.body))
 		req.msg <- msg
 		return true, nil
 	}
 
 	// Streaming reply (Stream): hand the live transport reader to the
-	// caller and hold the receive loop until it is given back.  A stream is
-	// not buffered and so not limited, and read at the pace of the caller.
-	body.setLimit(-1)
-	if body.untimed() {
-		return false, s.errStalled()
-	}
-	reader := &streamReader{
-		r:      io.MultiReader(head, body),
-		closer: body,
-		done:   make(chan struct{}),
+	// caller and hold the receive loop until it is given back.
+	reader, err := body.live()
+	if err != nil {
+		return false, err
 	}
 	msg.reader = reader
 
@@ -219,14 +194,13 @@ func (s *Session) recvReply(start *xml.StartElement, head *bytes.Buffer, body *b
 	defer s.streaming.Store(false)
 	req.msg <- msg
 
-	return true, s.awaitStream(req, reader, body)
+	return true, s.awaitStream(req, reader)
 }
 
 // awaitStream blocks until the streamed reply handed to req is finished
 // with: closed by its receiver, abandoned by a receiver whose context fired,
-// or cut short by the session closing its transport.  body is what the
-// stream reads the rest of the reply from.
-func (s *Session) awaitStream(req *pendingReply, reader *streamReader, body *boundedReader) error {
+// or cut short by the session closing its transport.
+func (s *Session) awaitStream(req *pendingReply, reader *streamReader) error {
 	ctxDone := req.ctx.Done()
 	for {
 		select {
@@ -242,7 +216,7 @@ func (s *Session) awaitStream(req *pendingReply, reader *streamReader, body *bou
 				// Nobody reads it at a pace of their own any more: closing
 				// it reads the rest, which is waited for like the rest of
 				// any message.
-				body.timed(s.msgTimeout)
+				reader.body.timed()
 				return abandoned.Close()
 			default:
 				ctxDone = nil
@@ -259,8 +233,8 @@ func (s *Session) awaitStream(req *pendingReply, reader *streamReader, body *bou
 // streamReader is the reader of a streamed reply.  Closing it releases the
 // receive loop.
 type streamReader struct {
-	r      io.Reader
-	closer io.Closer
+	r    io.Reader
+	body *boundedReader
 
 	// mu keeps Close, which may come from the session, from pulling the
 	// transport reader out from under a Read in progress
@@ -289,15 +263,14 @@ func (r *streamReader) Close() error {
 	r.once.Do(func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		err = r.closer.Close()
+		err = r.body.Close()
 		close(r.done)
 	})
 	return err
 }
 
 // recvNotification buffers a notification and queues it for the handler.
-// head holds the part of the message already read, body reads the rest.
-func (s *Session) recvNotification(start *xml.StartElement, head *bytes.Buffer, body *boundedReader) (bool, error) {
+func (s *Session) recvNotification(start *xml.StartElement, body *boundedReader) (bool, error) {
 	if s.notif == nil {
 		s.logger.Warn("skipping a notification: the session has no handler, see WithNotifHandler")
 		return false, nil
@@ -305,13 +278,10 @@ func (s *Session) recvNotification(start *xml.StartElement, head *bytes.Buffer, 
 
 	// Buffer the notification so the receive loop is free to continue and
 	// handlers can safely issue RPCs on this session.
-	if _, err := head.ReadFrom(body); err != nil {
-		return false, fmt.Errorf("failed to read notification: %w", err)
+	whole, err := body.whole("notification")
+	if err != nil {
+		return false, err
 	}
-	if body.untimed() {
-		return false, s.errStalled()
-	}
-	whole := s.buffered(head.Bytes())
 	msg := &Message{
 		body:       whole,
 		reader:     io.NopCloser(bytes.NewReader(whole)),

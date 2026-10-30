@@ -274,7 +274,8 @@ func (s *Session) exchangeHello() error {
 	defer func() {
 		_ = r.Close()
 	}()
-	r.setLimit(s.maxMessageSize)
+	// the context of Open is what a hello that stops arriving is up against
+	r.untimed()
 
 	raw, readErr := io.ReadAll(r)
 	said, err := readGreeting(raw)
@@ -396,15 +397,9 @@ func (s *Session) fail(err error) {
 
 // stalled ends the session over a message that stopped arriving.  Closing
 // the transport is what gets the receive loop off its read.
-func (s *Session) stalled() {
-	s.fail(s.errStalled())
+func (s *Session) stalled(err error) {
+	s.fail(err)
 	_ = s.closeTransport()
-}
-
-// errStalled is what a session ends with over a message that stopped
-// arriving.
-func (s *Session) errStalled() error {
-	return fmt.Errorf("%w: no byte of it for %s", ErrMessageStalled, s.msgTimeout)
 }
 
 // closedErr is the error for an operation that cannot complete because the
@@ -437,14 +432,24 @@ func (s *Session) buffered(msg []byte) []byte {
 	return msg
 }
 
-// msgReader returns a reader for the next inbound message.  Its limit is
-// still to be set.
+// msgReader returns a reader for the next inbound message, under the limits
+// of the session.
 func (s *Session) msgReader() (*boundedReader, error) {
 	r, err := s.tr.MsgReader()
 	if err != nil {
 		return nil, err
 	}
-	return &boundedReader{r: r, left: -1, closeTransport: s.closeTransport}, nil
+	b := &boundedReader{
+		r:              r,
+		limit:          s.maxMessageSize,
+		closeTransport: s.closeTransport,
+		handOn:         s.buffered,
+		stalled:        s.stalled,
+		timeout:        s.msgTimeout,
+		quiet:          s.msgTimeout,
+	}
+	b.setLimit(b.limit)
+	return b, nil
 }
 
 // send writes one message to the transport, one sender at a time.
@@ -462,7 +467,8 @@ func (s *Session) msgReader() (*boundedReader, error) {
 // when the one before it was answered were all answered.  The beginning of a
 // reply would not do for that: Junos sends the start tag of a reply when it
 // has the start tag of the request.  A message whose context fires while it
-// waits for its turn is not sent.
+// waits for its turn is not sent.  Which message ends a turn is for the reply
+// table to say, see replyTable.turnOver.
 func (s *Session) send(ctx context.Context, req *pendingReply, payload []byte) error {
 	if err := s.takeTurn(ctx); err != nil {
 		return err
@@ -481,6 +487,9 @@ func (s *Session) send(ctx context.Context, req *pendingReply, payload []byte) e
 	// From here on the server may answer, even if we stop waiting.  The turn
 	// stays taken until it has, whoever waits for the answer.
 	s.replies.markSent(req)
+	if s.turn != nil {
+		s.replies.holdTurn(req)
+	}
 
 	result := make(chan error, 1)
 	go func() {
@@ -737,6 +746,8 @@ func (s *Session) exec(ctx context.Context, op any, internal bool) (*Reply, erro
 // a pointer at `reply`. The Reply must include the full <rpc-reply> structure.
 // See ExecReply for how op is encoded and RPC errors are reported.
 //
+// A *Reply as reply gets the reply as it is, warnings included.
+//
 // Exec has nowhere to return warnings, so it logs that there were some.  Use
 // ExecReply to get them.
 func (s *Session) Exec(ctx context.Context, op, reply any) error {
@@ -749,7 +760,11 @@ func (s *Session) Exec(ctx context.Context, op, reply any) error {
 			"count", len(r.Warnings),
 			"first", logValue(strings.TrimSpace(r.Warnings[0].Message)))
 	}
-	if reply == nil {
+	switch into := reply.(type) {
+	case nil:
+		return nil
+	case *Reply:
+		*into = *r
 		return nil
 	}
 	return r.Decode(reply)

@@ -5,6 +5,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- The `rpc` operations and `rpc.ExecOK` read the `<ok/>` the way the
+  `junos` operations do. Without one, the error holds the warnings of the
+  reply, and with a `load-error-count` it matches `netconf.RPCErrors`.
+- `Session.Exec` takes a `*netconf.Reply` as its reply, and fills it in as
+  it is.
+
+### Fixed
+
+- `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
+  written. A hello queued before it could go out chunked, and
+  `netconf.Open` then timed out.
+- A message that a Junos device sends unasked over chunked framing lets
+  one request go early. The session stayed one reply behind from there,
+  so that the device had two requests at once for as long as requests
+  kept waiting.
+- A session closes the reader of a streamed reply once. It closed it
+  twice, which ended the session on a transport that refuses a second
+  `Close` of a message reader.
+
 ## v0.1.0 - 2026-10-19
 
 These changes make up the first release of the fork of `nemith.io/netconf`

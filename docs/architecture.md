@@ -15,7 +15,10 @@ session, a transport or `junos.Change`. Terms are in
 | `transport/ssh`, `transport/tls`, `transport/command` | Login or process start, and the connection or process they own, see [Connecting](connecting.md#tls-and-ready-made-ssh-clients) |
 | `transport/transporttest` | The conformance suite every transport must pass |
 | `internal/netconftest` | Scripted devices for unit tests |
+| `internal/outbox` | The queue of messages that `transporttest.StreamPeer` and `netconftest.Transport` share |
+| `internal/ack` | The check that a reply holds the `<ok/>`, for `rpc` and `junos` |
 | `internal/operr`, `internal/xmlutil` | Error prefixes with the operation's name, and shared XML helpers |
+| `internal/msgio` | The message reader and writer of `ncssh` and `nccmd`, whose errors say why the transport closed |
 | `internal/tail` | The last 4 KiB of standard error, quoted when an `nccmd` process or `ncssh.WithCommand` command exits |
 | `internal/cmd/doccheck`, `internal/cmd/junosschema` | The programs behind `make docs-check` and `make junos-schema` |
 | `examples` | Runnable programs, with shared setup in `examples/internal/exampleutil` |
@@ -60,8 +63,9 @@ transport message reader -> receive loop reads the start tag
 ```
 
 The receive loop is in [`recv.go`](../recv.go), `parseReply` in
-[`msg.go`](../msg.go), the limits in [`limit.go`](../limit.go) and the
-queue in [`notify.go`](../notify.go). The repair is the function given to
+[`msg.go`](../msg.go), the queue in [`notify.go`](../notify.go), and in
+[`limit.go`](../limit.go) `boundedReader`, which reads one message under
+the limits and closes its transport reader once. The repair is the function given to
 `netconf.WithReplyRepair`, such as `netconf.StripInvalidChars` in
 [`repair.go`](../repair.go). For a Junos device,
 [`charref.go`](../charref.go) joins the per-byte character references of
