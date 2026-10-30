@@ -1130,11 +1130,12 @@ func TestAwaitStreamReclaimsAbandonedReply(t *testing.T) {
 	req := &pendingReply{msg: make(chan *Message, 1), ctx: ctx, stream: true}
 
 	body, _, _ := bounded(strings.NewReader("<rpc-reply/>"), -1)
-	reader := &streamReader{r: body, closer: body, done: make(chan struct{})}
+	reader, err := body.live()
+	be.NilErr(t, err)
 	req.msg <- &Message{reader: reader}
 
 	returned := make(chan error, 1)
-	go func() { returned <- sess.awaitStream(req, reader, body) }()
+	go func() { returned <- sess.awaitStream(req, reader) }()
 
 	select {
 	case err := <-returned:
@@ -1163,12 +1164,12 @@ func TestAwaitStreamTimesAbandonedReply(t *testing.T) {
 	// the rest of the reply never comes: the device says nothing
 	body, err := sess.msgReader()
 	be.NilErr(t, err)
-	body.stalled = sess.stalled
-	reader := &streamReader{r: body, closer: body, done: make(chan struct{})}
+	reader, err := body.live()
+	be.NilErr(t, err)
 	req.msg <- &Message{reader: reader}
 
 	returned := make(chan error, 1)
-	go func() { returned <- sess.awaitStream(req, reader, body) }()
+	go func() { returned <- sess.awaitStream(req, reader) }()
 
 	select {
 	case <-returned: //nolint:errcheck // only that it returns matters here
@@ -1176,6 +1177,60 @@ func TestAwaitStreamTimesAbandonedReply(t *testing.T) {
 		t.Fatal("the receive loop waits for the rest of a reply nobody reads, in spite of the message timeout")
 	}
 	be.True(t, errors.Is(sess.Err(), ErrMessageStalled))
+}
+
+// onceReader is a message reader that refuses a second Close, which the
+// contract of a transport leaves open.
+type onceReader struct {
+	io.ReadCloser
+	closed bool
+}
+
+func (r *onceReader) Close() error {
+	if r.closed {
+		return errors.New("reader closed twice")
+	}
+	r.closed = true
+	return r.ReadCloser.Close()
+}
+
+// onceWire is a transport whose message readers are onceReaders.
+type onceWire struct{ *netconftest.Wire }
+
+func (w onceWire) MsgReader() (io.ReadCloser, error) {
+	r, err := w.Wire.MsgReader()
+	if err != nil {
+		return nil, err
+	}
+	return &onceReader{ReadCloser: r}, nil
+}
+
+// A streamed reply is handed over and taken back, and its transport reader
+// is closed once for all that.
+func TestStreamedReplyClosesItsReaderOnce(t *testing.T) {
+	wire, dev := turnWire(t, wireHello)
+	sess, err := Open(context.Background(), onceWire{wire}, WithLogger(slog.New(slog.DiscardHandler)))
+	be.NilErr(t, err)
+	ctx := testCtx(t)
+
+	type streamed struct {
+		msg *Message
+		err error
+	}
+	began := make(chan streamed, 1)
+	go func() {
+		msg, err := sess.Stream(ctx, "<first/>")
+		began <- streamed{msg, err}
+	}()
+	dev.answer(t, dev.next(t))
+	reply := <-began
+	be.NilErr(t, reply.err)
+	be.NilErr(t, reply.msg.Close())
+
+	second := ask(ctx, sess, "<second/>")
+	dev.answer(t, dev.next(t))
+	be.NilErr(t, <-second)
+	be.NilErr(t, sess.Err())
 }
 
 // The caller of an operation can give up once the receive loop has found out

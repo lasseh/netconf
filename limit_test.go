@@ -33,7 +33,7 @@ func (f *frame) Close() error {
 func bounded(r io.Reader, limit int64) (*boundedReader, *frame, *int) {
 	f := &frame{Reader: r}
 	transportCloses := new(int)
-	b := &boundedReader{r: f, left: -1, closeTransport: func() error {
+	b := &boundedReader{r: f, limit: limit, closeTransport: func() error {
 		*transportCloses++
 		return nil
 	}}
@@ -91,6 +91,14 @@ func TestBoundedReader(t *testing.T) {
 		be.Equal(t, 1, *closes)
 	})
 
+	t.Run("closing again leaves the transport reader alone", func(t *testing.T) {
+		b, f, _ := bounded(strings.NewReader("12345"), 5)
+		be.NilErr(t, b.Close())
+		f.closed = false
+		be.NilErr(t, b.Close())
+		be.False(t, f.closed)
+	})
+
 	t.Run("limit counts what was read before it was set", func(t *testing.T) {
 		b, _, _ := bounded(strings.NewReader("1234567890"), -1)
 		_, err := io.ReadFull(b, make([]byte, 6))
@@ -121,7 +129,7 @@ func TestBoundedReaderStall(t *testing.T) {
 	watched := func(quiet time.Duration) (*boundedReader, fed, chan struct{}) {
 		message, gaveUp := make(fed), make(chan struct{}, 1)
 		b, _, _ := bounded(message, -1)
-		b.quiet, b.stalled = quiet, func() { gaveUp <- struct{}{} }
+		b.quiet, b.timeout, b.stalled = quiet, quiet, func(error) { gaveUp <- struct{}{} }
 		return b, message, gaveUp
 	}
 	// read has piece arrive and reads it
@@ -202,7 +210,8 @@ func TestBoundedReaderStall(t *testing.T) {
 		read(t, b, message, "<rpc-reply>")
 		be.False(t, b.untimed())
 
-		b.timed(10 * time.Millisecond)
+		b.timeout = 10 * time.Millisecond
+		b.timed()
 		awaitGivenUp(t, gaveUp)
 		be.True(t, b.untimed())
 	})

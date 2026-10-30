@@ -60,8 +60,9 @@ transport message reader -> receive loop reads the start tag
 ```
 
 The receive loop is in [`recv.go`](../recv.go), `parseReply` in
-[`msg.go`](../msg.go), the limits in [`limit.go`](../limit.go) and the
-queue in [`notify.go`](../notify.go). The repair is the function given to
+[`msg.go`](../msg.go), the queue in [`notify.go`](../notify.go), and in
+[`limit.go`](../limit.go) `boundedReader`, which reads one message under
+the limits and closes its transport reader once. The repair is the function given to
 `netconf.WithReplyRepair`, such as `netconf.StripInvalidChars` in
 [`repair.go`](../repair.go). For a Junos device,
 [`charref.go`](../charref.go) joins the per-byte character references of

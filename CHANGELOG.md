@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+
+- A session closes the reader of a streamed reply once. It closed it
+  twice, which ended the session on a transport that refuses a second
+  `Close` of a message reader.
+
 ## v0.1.0 - 2026-10-19
 
 These changes make up the first release of the fork of `nemith.io/netconf`

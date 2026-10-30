@@ -274,7 +274,8 @@ func (s *Session) exchangeHello() error {
 	defer func() {
 		_ = r.Close()
 	}()
-	r.setLimit(s.maxMessageSize)
+	// the context of Open is what a hello that stops arriving is up against
+	r.untimed()
 
 	raw, readErr := io.ReadAll(r)
 	said, err := readGreeting(raw)
@@ -396,15 +397,9 @@ func (s *Session) fail(err error) {
 
 // stalled ends the session over a message that stopped arriving.  Closing
 // the transport is what gets the receive loop off its read.
-func (s *Session) stalled() {
-	s.fail(s.errStalled())
+func (s *Session) stalled(err error) {
+	s.fail(err)
 	_ = s.closeTransport()
-}
-
-// errStalled is what a session ends with over a message that stopped
-// arriving.
-func (s *Session) errStalled() error {
-	return fmt.Errorf("%w: no byte of it for %s", ErrMessageStalled, s.msgTimeout)
 }
 
 // closedErr is the error for an operation that cannot complete because the
@@ -437,14 +432,24 @@ func (s *Session) buffered(msg []byte) []byte {
 	return msg
 }
 
-// msgReader returns a reader for the next inbound message.  Its limit is
-// still to be set.
+// msgReader returns a reader for the next inbound message, under the limits
+// of the session.
 func (s *Session) msgReader() (*boundedReader, error) {
 	r, err := s.tr.MsgReader()
 	if err != nil {
 		return nil, err
 	}
-	return &boundedReader{r: r, left: -1, closeTransport: s.closeTransport}, nil
+	b := &boundedReader{
+		r:              r,
+		limit:          s.maxMessageSize,
+		closeTransport: s.closeTransport,
+		handOn:         s.buffered,
+		stalled:        s.stalled,
+		timeout:        s.msgTimeout,
+		quiet:          s.msgTimeout,
+	}
+	b.setLimit(b.limit)
+	return b, nil
 }
 
 // send writes one message to the transport, one sender at a time.

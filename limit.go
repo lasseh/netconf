@@ -2,7 +2,9 @@ package netconf
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -17,26 +19,41 @@ var ErrMessageTooLarge = errors.New("message exceeds the maximum message size")
 // WithMessageTimeout.
 var ErrMessageStalled = errors.New("netconf: the device stopped in the middle of a message")
 
-// boundedReader reads one inbound message under a size limit.  The limit
-// holds for everything taken off the transport for the message, including
-// what Close drains when the message is not read to its end, so a peer
-// cannot keep the session busy with a message that never ends.
+// boundedReader is one inbound message on its way from the transport to
+// whoever gets it: start reads as far as its start element, then whole reads
+// the rest or live hands the rest over, and Close releases the transport
+// reader, once, however far that went.
+//
+// The message is read under a size limit.  The limit holds for everything
+// taken off the transport for the message, including what Close drains when
+// the message is not read to its end, so a peer cannot keep the session busy
+// with a message that never ends.
 //
 // Once the limit is exceeded the message stream cannot be realigned without
 // reading on, so the transport is closed instead.
 type boundedReader struct {
 	r io.ReadCloser
 
-	// left is how many more bytes the message may have, negative for no
-	// limit
-	left int64
-	read int64
+	// head holds what was read of the message and is not handed on yet
+	head bytes.Buffer
+
+	// limit is the size the message may have, negative for no limit.  left
+	// is how many more bytes it may have right now, negative for no limit.
+	limit int64
+	left  int64
+	read  int64
 
 	exceeded       bool
+	closed         bool
 	closeTransport func() error
 
-	// stalled is called when the message is given up, see quiet
-	stalled func()
+	// handOn makes a message read whole what is handed on
+	handOn func([]byte) []byte
+
+	// stalled is called when the message is given up, see quiet, with what
+	// the session ends with.  timeout is the quiet a message is allowed.
+	stalled func(error)
+	timeout time.Duration
 
 	// mu guards the watch for a message that stops arriving, which the
 	// reader of the message and the timer both look at: what follows
@@ -104,16 +121,22 @@ func (b *boundedReader) silent() {
 	b.gaveUp = true
 	b.mu.Unlock()
 
-	b.stalled()
+	b.stalled(b.errStalled())
+}
+
+// errStalled is what a session ends with over a message that stopped
+// arriving.
+func (b *boundedReader) errStalled() error {
+	return fmt.Errorf("%w: no byte of it for %s", ErrMessageStalled, b.timeout)
 }
 
 // timed begins the watch for a message that stops arriving, from now.  It
 // is for a message that was handed out untimed and has been taken back.
-func (b *boundedReader) timed(quiet time.Duration) {
+func (b *boundedReader) timed() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.quiet = quiet; quiet > 0 {
+	if b.quiet = b.timeout; b.quiet > 0 {
 		b.watch()
 	}
 }
@@ -142,6 +165,52 @@ func (b *boundedReader) setLimit(total int64) {
 		return
 	}
 	b.left = max(total-b.read, 0)
+}
+
+// start reads the message as far as its start element, keeping every byte
+// the decoder consumed in head so the message can still be delivered whole.
+// What comes before the start element is buffered whatever becomes of the
+// message, hence the tighter limit.
+func (b *boundedReader) start() (*xml.StartElement, error) {
+	b.setLimit(maxStartSize)
+	if b.limit >= 0 {
+		b.setLimit(min(maxStartSize, b.limit))
+	}
+	peel := xml.NewDecoder(io.TeeReader(b, &b.head))
+	// Only the start element is looked at here, and its name is ASCII
+	// whatever encoding the message declares.
+	peel.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
+
+	start, err := startElement(peel)
+	b.setLimit(b.limit)
+	return start, err
+}
+
+// whole reads the rest of the message and returns all of it the way it is
+// handed on.  what names the message in the error of a read that failed.
+func (b *boundedReader) whole(what string) ([]byte, error) {
+	if _, err := b.head.ReadFrom(b); err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", what, err)
+	}
+	// all of it has arrived: what is done with it is not its silence
+	if b.untimed() {
+		return nil, b.errStalled()
+	}
+	return b.handOn(b.head.Bytes()), nil
+}
+
+// live returns the reader of the message for somebody who reads it at a pace
+// of their own.  A stream is not buffered and so not limited.
+func (b *boundedReader) live() (*streamReader, error) {
+	b.setLimit(-1)
+	if b.untimed() {
+		return nil, b.errStalled()
+	}
+	return &streamReader{
+		r:    io.MultiReader(&b.head, b),
+		body: b,
+		done: make(chan struct{}),
+	}, nil
 }
 
 func (b *boundedReader) Read(p []byte) (int, error) {
@@ -177,8 +246,14 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 }
 
 // Close releases the transport reader, first reading the rest of the message
-// so the stream stays aligned on a message boundary.
+// so the stream stays aligned on a message boundary.  Closing it again does
+// nothing: a transport does not have to take a second Close of a reader.
 func (b *boundedReader) Close() error {
+	if b.closed {
+		return nil
+	}
+	b.closed = true
+
 	// what is drained here is still part of the message, and is read
 	// through b so that it is timed like the rest, with a limit or without
 	defer b.untimed()
