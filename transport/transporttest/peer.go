@@ -8,21 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lasseh/netconf/internal/outbox"
 	"github.com/lasseh/netconf/transport"
 )
 
 // StreamPeer is a Peer for transports that carry RFC6242 framing on a byte
 // stream.  It speaks the same framing on the device's end of that stream.
 type StreamPeer struct {
+	t     *testing.T
 	fr    *transport.Framer
 	stall func()
 
-	// outbox holds the messages still to be sent, wake signals a change to
-	// it or to done
-	mu     sync.Mutex
-	wake   *sync.Cond
-	outbox []string
-	done   bool
+	// outbox holds the messages still to be sent
+	outbox *outbox.Queue
 }
 
 // NewStreamPeer returns a Peer on rw, the device's end of the byte stream
@@ -35,52 +33,27 @@ type StreamPeer struct {
 func NewStreamPeer(t *testing.T, rw io.ReadWriter, stall func()) *StreamPeer {
 	t.Helper()
 
-	p := &StreamPeer{fr: transport.NewFramer(rw, rw), stall: stall}
-	p.wake = sync.NewCond(&p.mu)
+	p := &StreamPeer{t: t, fr: transport.NewFramer(rw, rw), stall: stall, outbox: outbox.New()}
 
-	go p.sendLoop()
-	t.Cleanup(func() {
-		p.mu.Lock()
-		p.done = true
-		p.mu.Unlock()
-		p.wake.Broadcast()
-	})
+	go p.outbox.Run(p.send)
+	t.Cleanup(p.outbox.Stop)
 	return p
 }
 
-// sendLoop writes the queued messages one at a time, so Send never waits for
-// the client to read.
-func (p *StreamPeer) sendLoop() {
-	for {
-		p.mu.Lock()
-		for len(p.outbox) == 0 && !p.done {
-			p.wake.Wait()
-		}
-		if p.done {
-			p.mu.Unlock()
-			return
-		}
-		msg := p.outbox[0]
-		p.outbox = p.outbox[1:]
-		p.mu.Unlock()
-
-		w, err := p.fr.MsgWriter()
-		if err != nil {
-			return
-		}
-		_, _ = io.WriteString(w, msg)
-		if err := w.Close(); err != nil {
-			return
-		}
+// send writes one queued message.
+func (p *StreamPeer) send(msg string) error {
+	w, err := p.fr.MsgWriter()
+	if err != nil {
+		return err
 	}
+	_, _ = io.WriteString(w, msg)
+	return w.Close()
 }
 
-// Send queues one complete message for the client.
+// Send queues one complete message for the client.  Send never waits for the
+// client to read.
 func (p *StreamPeer) Send(msg string) {
-	p.mu.Lock()
-	p.outbox = append(p.outbox, msg)
-	p.mu.Unlock()
-	p.wake.Broadcast()
+	p.outbox.Push(msg)
 }
 
 // Recv returns the next complete message written by the client.
@@ -117,8 +90,16 @@ func (p *StreamPeer) Recv(t *testing.T) string {
 	}
 }
 
-// Upgrade follows the client into chunked framing.
-func (p *StreamPeer) Upgrade() { p.fr.Upgrade() }
+// Upgrade follows the client into chunked framing.  What Send has queued goes
+// out in the framing it was queued in: Upgrade waits until it is written, on
+// a stream that hands over bytes only when they are read until the client
+// has read it, and fails the test when that takes too long.
+func (p *StreamPeer) Upgrade() {
+	if !p.outbox.Wait(timeout) {
+		p.t.Error("peer Upgrade timed out: the client did not read what was sent")
+	}
+	p.fr.Upgrade()
+}
 
 // Stall makes the device go silent, like one that lost power: from here on
 // it reads nothing the client sends and sends nothing itself, without

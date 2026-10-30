@@ -15,6 +15,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
+  written. A hello queued before it could go out chunked, and
+  `netconf.Open` then timed out.
 - A message that a Junos device sends unasked over chunked framing lets
   one request go early. The session stayed one reply behind from there,
   so that the device had two requests at once for as long as requests

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lasseh/netconf/internal/outbox"
 	"github.com/lasseh/netconf/transport"
 )
 
@@ -27,10 +28,10 @@ type Transport struct {
 	dev     *Device
 	handler RequestHandler
 
+	outbox *outbox.Queue
+
 	mu       sync.Mutex
-	wake     *sync.Cond // signals outbox/closed changes
 	outputs  []string
-	outbox   []string
 	closed   bool
 	upgraded bool
 	// chunks says that the hello of the client offered chunked framing
@@ -95,11 +96,10 @@ func NewTransport(t testing.TB, handler RequestHandler) *Transport {
 	})
 
 	wire, dev := NewWire(t)
-	tr := &Transport{Wire: wire, t: t, dev: dev, handler: handler}
-	tr.wake = sync.NewCond(&tr.mu)
+	tr := &Transport{Wire: wire, t: t, dev: dev, handler: handler, outbox: outbox.New()}
 
 	device.Go(tr.receive)
-	device.Go(tr.deliver)
+	device.Go(func() { tr.outbox.Run(tr.deliver) })
 	t.Cleanup(func() { _ = tr.Close() })
 	return tr
 }
@@ -128,43 +128,28 @@ func (t *Transport) receive() {
 	}
 }
 
-// deliver sends queued messages to the client, one at a time.
-func (t *Transport) deliver() {
-	for {
-		t.mu.Lock()
-		for len(t.outbox) == 0 && !t.closed {
-			t.wake.Wait()
-		}
-		if t.closed {
-			t.mu.Unlock()
-			return
-		}
-		msg := t.outbox[0]
-		t.outbox = t.outbox[1:]
-		// A hello that settles on chunked framing is the last message of the
-		// device in the old one.  The device switches with it and does not
-		// wait for the client to do so: what is queued behind the hello would
-		// go out in whichever framing the client had got to by then.
-		last := isHello(msg) && strings.Contains(msg, chunked) && t.chunks
-		t.mu.Unlock()
+// deliver sends one queued message to the client.
+func (t *Transport) deliver(msg string) error {
+	t.mu.Lock()
+	// A hello that settles on chunked framing is the last message of the
+	// device in the old one.  The device switches with it and does not wait
+	// for the client to do so: what is queued behind the hello would go out
+	// in whichever framing the client had got to by then.
+	last := isHello(msg) && strings.Contains(msg, chunked) && t.chunks
+	t.mu.Unlock()
 
-		if err := t.dev.send(msg, last); err != nil {
-			// The framing refusing a scripted message is a mistake in the
-			// test, and would otherwise show as a client waiting for ever.
-			if errors.Is(err, transport.ErrEndOfMsgInPayload) {
-				t.t.Errorf("netconftest: scripted message cannot be framed: %v", err)
-			}
-			return
-		}
+	err := t.dev.send(msg, last)
+	// The framing refusing a scripted message is a mistake in the test, and
+	// would otherwise show as a client waiting for ever.
+	if errors.Is(err, transport.ErrEndOfMsgInPayload) {
+		t.t.Errorf("netconftest: scripted message cannot be framed: %v", err)
 	}
+	return err
 }
 
 // Push queues messages for the client, independently of any request.
 func (t *Transport) Push(msgs ...string) {
-	t.mu.Lock()
-	t.outbox = append(t.outbox, msgs...)
-	t.mu.Unlock()
-	t.wake.Broadcast()
+	t.outbox.Push(msgs...)
 }
 
 // Upgrade switches both the client and the device to chunked framing.  A
@@ -190,7 +175,7 @@ func (t *Transport) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	t.mu.Unlock()
-	t.wake.Broadcast()
+	t.outbox.Stop()
 
 	return t.Wire.Close()
 }
