@@ -18,6 +18,7 @@ session, a transport or `junos.Change`. Terms are in
 | `internal/outbox` | The queue of messages that `transporttest.StreamPeer` and `netconftest.Transport` share |
 | `internal/ack` | The check that a reply holds the `<ok/>`, for `rpc` and `junos` |
 | `internal/operr`, `internal/xmlutil` | Error prefixes with the operation's name, and shared XML helpers |
+| `internal/msgio` | The message reader and writer of `ncssh` and `nccmd`, whose errors say why the transport closed |
 | `internal/tail` | The last 4 KiB of standard error, quoted when an `nccmd` process or `ncssh.WithCommand` command exits |
 | `internal/cmd/doccheck`, `internal/cmd/junosschema` | The programs behind `make docs-check` and `make junos-schema` |
 | `examples` | Runnable programs, with shared setup in `examples/internal/exampleutil` |

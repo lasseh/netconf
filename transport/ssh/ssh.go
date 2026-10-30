@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lasseh/netconf/internal/msgio"
 	"github.com/lasseh/netconf/internal/tail"
 	"github.com/lasseh/netconf/transport"
 )
@@ -483,7 +484,7 @@ func (t *Transport) MsgReader() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, t.because(err)
 	}
-	return msgReader{r, t}, nil
+	return msgio.Reader(r, t.because), nil
 }
 
 // MsgWriter returns a writer for a new message, like the one of the Framer.
@@ -494,54 +495,7 @@ func (t *Transport) MsgWriter() (io.WriteCloser, error) {
 	if err != nil {
 		return nil, t.because(err)
 	}
-	return msgWriter{w, t}, nil
-}
-
-// msgReader and msgWriter are the reader and the writer of a message, with
-// errors that name the keepalive when it closed the transport under them.
-type (
-	msgReader struct {
-		io.ReadCloser
-		t *Transport
-	}
-	msgWriter struct {
-		io.WriteCloser
-		t *Transport
-	}
-)
-
-func (r msgReader) Read(p []byte) (int, error) {
-	n, err := r.ReadCloser.Read(p)
-	// the end of a message is not a failure
-	if err != nil && err != io.EOF { //nolint:errorlint // what a reader ends with, never wrapped
-		err = r.t.because(err)
-	}
-	return n, err
-}
-
-// Close reads the message to its end.  What that fails with is explained
-// like the error of a Read: the session closes a message that nobody reads
-// without reading it first.
-func (r msgReader) Close() error {
-	if err := r.ReadCloser.Close(); err != nil {
-		return r.t.because(err)
-	}
-	return nil
-}
-
-func (w msgWriter) Write(p []byte) (int, error) {
-	n, err := w.WriteCloser.Write(p)
-	if err != nil {
-		err = w.t.because(err)
-	}
-	return n, err
-}
-
-func (w msgWriter) Close() error {
-	if err := w.WriteCloser.Close(); err != nil {
-		return w.t.because(err)
-	}
-	return nil
+	return msgio.Writer(w, t.because), nil
 }
 
 // because returns why IO on the transport failed with err: the keepalive, if
