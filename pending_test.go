@@ -40,6 +40,42 @@ func TestReplyTable(t *testing.T) {
 		be.NilErr(t, table.register("2", newReq(), true))
 	})
 
+	t.Run("a message nobody asked for ends a turn once", func(t *testing.T) {
+		table := newReplyTable()
+		a, b := newReq(), newReq()
+		be.NilErr(t, table.register("1", a, false))
+		be.NilErr(t, table.register("2", b, false))
+
+		table.markSent(a)
+		table.holdTurn(a)
+		be.True(t, resolved(table, "99") == nil)
+		be.True(t, table.turnOver())
+
+		table.markSent(b)
+		table.holdTurn(b)
+		be.True(t, resolved(table, "1") == a)
+		be.False(t, table.turnOver())
+		be.True(t, resolved(table, "2") == b)
+		be.True(t, table.turnOver())
+	})
+
+	t.Run("no turn to end", func(t *testing.T) {
+		table := newReplyTable()
+		a := newReq()
+		be.NilErr(t, table.register("1", a, false))
+		be.False(t, table.turnOver())
+
+		table.markSent(a)
+		table.holdTurn(a)
+		table.notSent(a)
+		be.False(t, table.turnOver())
+
+		// a session without turns
+		table.markSent(a)
+		be.True(t, resolved(table, "1") == a)
+		be.False(t, table.turnOver())
+	})
+
 	t.Run("forget does not drop a reused message-id", func(t *testing.T) {
 		table := newReplyTable()
 		a, b := newReq(), newReq()

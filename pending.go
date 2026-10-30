@@ -8,6 +8,9 @@ import (
 
 // pendingReply is an operation waiting for its reply.
 type pendingReply struct {
+	// id is the message-id of the operation
+	id string
+
 	// msg has room for the one reply so the receive loop never blocks on it
 	msg chan *Message
 	ctx context.Context
@@ -35,10 +38,23 @@ type replyTable struct {
 	// orphans counts operations that were sent and then given up on before
 	// their reply arrived.  Their replies may still come in.
 	orphans int
+
+	// holder is the message-id of the request that has the turn and is on
+	// its way, on a session that has turns, see Session.send
+	holder string
+	// early holds the requests that lost the turn to another message.  Their
+	// replies are still to come and end no turn.
+	early map[string]struct{}
+	// replied is the message-id of the reply being read, empty for any other
+	// message
+	replied string
 }
 
 func newReplyTable() *replyTable {
-	return &replyTable{pending: make(map[string]*pendingReply)}
+	return &replyTable{
+		pending: make(map[string]*pendingReply),
+		early:   make(map[string]struct{}),
+	}
 }
 
 // register adds req to the operations awaiting a reply.  internal marks the
@@ -53,6 +69,7 @@ func (t *replyTable) register(msgID string, req *pendingReply, internal bool) er
 	if _, ok := t.pending[msgID]; ok {
 		return fmt.Errorf("rpc with message-id %q is already pending", msgID)
 	}
+	req.id = msgID
 	t.pending[msgID] = req
 	return nil
 }
@@ -62,6 +79,13 @@ func (t *replyTable) markSent(req *pendingReply) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	req.sent = true
+}
+
+// holdTurn records that req has the turn and is going out on the wire.
+func (t *replyTable) holdTurn(req *pendingReply) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.holder = req.id
 }
 
 // notSent records that req did not go out after all.  Its caller may have
@@ -77,6 +101,9 @@ func (t *replyTable) notSent(req *pendingReply) {
 	req.sent = false
 	if req.forgotten && t.orphans > 0 {
 		t.orphans--
+	}
+	if t.holder == req.id {
+		t.holder = ""
 	}
 }
 
@@ -127,12 +154,41 @@ func (t *replyTable) resolve(msgID string) (req *pendingReply, late bool) {
 		}
 	}
 
+	t.replied = msgID
 	req, ok := t.pending[msgID]
 	if !ok {
 		return nil, t.settleOrphan()
 	}
 	delete(t.pending, msgID)
 	return req, false
+}
+
+// turnOver reports whether the message that has just arrived whole, which is
+// no notification, ends the turn of the request that has it.
+//
+// Any such message does, one that nobody can read included: a session that
+// waited for a better one would send nothing more.  The request that lost
+// its turn that way is still to be answered, and that reply ends nothing, or
+// each reply would end the turn of the request behind its own for as long as
+// requests keep waiting.  With no request on its way there is no turn to end.
+func (t *replyTable) turnOver() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	replied := t.replied
+	t.replied = ""
+	if _, ok := t.early[replied]; ok {
+		delete(t.early, replied)
+		return false
+	}
+	if t.holder == "" {
+		return false
+	}
+	if t.holder != replied {
+		t.early[t.holder] = struct{}{}
+	}
+	t.holder = ""
+	return true
 }
 
 // settleOrphan accounts for a reply nobody waits for, and reports whether it

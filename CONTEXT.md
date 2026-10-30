@@ -83,7 +83,8 @@ process anything else.
 The right to have the one outstanding request on a session over chunked
 framing to a Junos device. An operation takes the turn before its request
 is written and keeps it until the next message that is not a notification
-has arrived whole, normally its reply. See
+has arrived whole, normally its reply. The reply to a request that lost its
+turn to such a message ends no turn. See
 [Sessions](docs/sessions.md#requests-from-several-goroutines).
 _Avoid_: lock, queue
 

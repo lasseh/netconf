@@ -387,6 +387,35 @@ func TestTurnAfterAMessageThatIsNotXML(t *testing.T) {
 	be.True(t, errors.Is(<-first, context.Canceled))
 }
 
+// A message nobody asked for lets one request go early, see ADR 0006.  The
+// reply that was still to come ends no turn, so requests go one at a time
+// again from there, and not each behind a reply to the one before that.
+func TestTurnAfterAnUnaskedMessage(t *testing.T) {
+	sess, dev := turnSession(t, wireHelloJunos11)
+	ctx := testCtx(t)
+
+	first := ask(ctx, sess, "<first/>")
+	one := dev.next(t)
+	be.NilErr(t, dev.Send(netconftest.Reply("999", "<ok/>")))
+
+	second := ask(ctx, sess, "<second/>")
+	two := dev.next(t)
+	be.In(t, "<second/>", two)
+
+	third := ask(ctx, sess, "<third/>")
+	dev.nothing(t)
+	dev.answer(t, one)
+	be.NilErr(t, <-first)
+	dev.nothing(t)
+
+	dev.answer(t, two)
+	be.NilErr(t, <-second)
+	three := dev.next(t)
+	be.In(t, "<third/>", three)
+	dev.answer(t, three)
+	be.NilErr(t, <-third)
+}
+
 // A notification is no answer: the turn stays where it is.
 func TestTurnAndANotification(t *testing.T) {
 	const notification = `<notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"><eventTime>2026-10-12T09:00:00Z</eventTime><event/></notification>`

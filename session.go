@@ -467,7 +467,8 @@ func (s *Session) msgReader() (*boundedReader, error) {
 // when the one before it was answered were all answered.  The beginning of a
 // reply would not do for that: Junos sends the start tag of a reply when it
 // has the start tag of the request.  A message whose context fires while it
-// waits for its turn is not sent.
+// waits for its turn is not sent.  Which message ends a turn is for the reply
+// table to say, see replyTable.turnOver.
 func (s *Session) send(ctx context.Context, req *pendingReply, payload []byte) error {
 	if err := s.takeTurn(ctx); err != nil {
 		return err
@@ -486,6 +487,9 @@ func (s *Session) send(ctx context.Context, req *pendingReply, payload []byte) e
 	// From here on the server may answer, even if we stop waiting.  The turn
 	// stays taken until it has, whoever waits for the answer.
 	s.replies.markSent(req)
+	if s.turn != nil {
+		s.replies.holdTurn(req)
+	}
 
 	result := make(chan error, 1)
 	go func() {

@@ -7,6 +7,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A message that a Junos device sends unasked over chunked framing lets
+  one request go early. The session stayed one reply behind from there,
+  so that the device had two requests at once for as long as requests
+  kept waiting.
 - A session closes the reader of a streamed reply once. It closed it
   twice, which ended the session on a transport that refuses a second
   `Close` of a message reader.

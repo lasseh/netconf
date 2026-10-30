@@ -70,3 +70,13 @@ accepts them, and a session to it writes them as they come.
 - The session end was seen on vJunos-router 26.2 only. The turn applies
   to every device with the Junos capability, vJunos-switch and
   vJunosEvolved included, where two requests at once were not tried.
+
+## Update, 2026-10-30
+
+The decision holds. A message that the device sends unasked still ends the
+turn, and one request goes early. The session used to stay one reply behind
+from there: the reply to the request that lost its turn ended the turn of
+the request behind it, and so on for as long as requests kept waiting. The
+reply table now records who has the turn. A reply to a request that lost
+its turn ends nothing, so one early request is all such a message costs.
+A message that arrives while no request is on its way ends no turn.

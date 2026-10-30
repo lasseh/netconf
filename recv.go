@@ -76,7 +76,7 @@ func (s *Session) recvMsg() (delivered bool, err error) {
 			delivered, err = false, fmt.Errorf("failed to drain message: %w", closeErr)
 		}
 		// all of the answer has arrived: the next operation may go, see send
-		if answer {
+		if answer && s.replies.turnOver() {
 			s.endTurn()
 		}
 	}()
