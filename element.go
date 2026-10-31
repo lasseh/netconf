@@ -187,6 +187,27 @@ func (r *Reply) Elements(name string) ([]Element, error) {
 	return findElements(r.Raw, name, false)
 }
 
+// HasElement reports whether the reply holds an element called name, see Elements
+// for how elements are found.  It reads all of the reply for that, and keeps
+// nothing of it: a reply that stops being XML behind the element fails.
+func (r *Reply) HasElement(name string) (bool, error) {
+	space, local := splitName(name)
+	found := false
+	d := xml.NewDecoder(bytes.NewReader(r.Raw))
+	for {
+		tok, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			return found, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("failed to parse reply: %w", located(r.Raw, d.InputOffset(), err))
+		}
+		if start, ok := tok.(xml.StartElement); ok && start.Name.Local == local && (space == "" || start.Name.Space == space) {
+			found = true
+		}
+	}
+}
+
 func splitName(name string) (space, local string) {
 	if i := strings.LastIndexByte(name, ' '); i >= 0 {
 		return name[:i], name[i+1:]
@@ -285,22 +306,16 @@ func readElement(raw []byte, d *xml.Decoder, begin int64) (Element, error) {
 	}
 }
 
-// child is one of the elements of a run of elements.
-type child struct {
-	// name is the name of the element as it is written, without its prefix
-	name string
-	raw  []byte
-}
-
-// elements returns the elements that raw, a run of elements, is made of.
-func elements(raw []byte) ([]child, error) {
-	var found []child
+// lastElement returns the last of the elements of raw, a run of elements, that
+// is not called skip, and nil when there is none.  It keeps no other.
+func lastElement(raw []byte, skip string) ([]byte, error) {
+	var last []byte
 	d := xml.NewDecoder(bytes.NewReader(raw))
 	for {
 		begin := d.InputOffset()
 		tok, err := d.Token()
 		if errors.Is(err, io.EOF) {
-			return found, nil
+			return last, nil
 		}
 		if err != nil {
 			return nil, err
@@ -314,6 +329,8 @@ func elements(raw []byte) ([]child, error) {
 		if err != nil {
 			return nil, err
 		}
-		found = append(found, child{name: start.Name.Local, raw: el.Raw})
+		if start.Name.Local != skip {
+			last = el.Raw
+		}
 	}
 }

@@ -328,50 +328,29 @@ type receivedNotification Notification
 
 // UnmarshalXML implements xml.Unmarshaler.
 func (n *receivedNotification) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	// No Content field here: encoding/xml would decode every element into it
+	// only to keep the last.
 	var v struct {
-		Notification
-		Inner []byte `xml:",innerxml"`
+		XMLName   xml.Name  `xml:"urn:ietf:params:xml:ns:netconf:notification:1.0 notification"`
+		EventTime time.Time `xml:"eventTime"`
+		Inner     []byte    `xml:",innerxml"`
 	}
 	if err := d.DecodeElement(&v, &start); err != nil {
 		return err
 	}
-	*n = receivedNotification(v.Notification)
-	// encoding/xml checks a name it reaches through an embedded struct and
-	// does not set it
-	n.XMLName = start.Name
+	n.XMLName, n.EventTime = start.Name, v.EventTime
 
-	// The content as it was written, for its Decode: the last of the
-	// elements that are not the time, which is the one encoding/xml has
-	// left in Content.
-	children, err := elements(v.Inner)
-	if err != nil {
+	// The content as it was written, for its Decode: the last of the elements
+	// that are not the time.
+	last, err := lastElement(v.Inner, "eventTime")
+	if err != nil || last == nil {
 		return err
 	}
-	contents := 0
-	for _, child := range slices.Backward(children) {
-		if child.name == "eventTime" {
-			continue
-		}
-		contents++
-		if contents == 1 {
-			// a copy: Inner, which the caller may append to and write
-			// into, is a piece of the same buffer
-			n.Content.raw = bytes.Clone(child.raw)
-			n.Content.ns = (*scope)(nil).inside(start.Attr)
-		}
-	}
-	// encoding/xml has the name and the content of the last element, and
-	// the attributes of every one
-	if contents > 1 {
-		var last struct {
-			Attr []xml.Attr `xml:",any,attr"`
-		}
-		if err := decodeIn(n.Content.ns, n.Content.raw, &last); err != nil {
-			return err
-		}
-		n.Content.Attr = last.Attr
-	}
-	return nil
+	// a copy: Inner, which the caller may append to and write into, is a piece
+	// of the same buffer
+	n.Content.raw = bytes.Clone(last)
+	n.Content.ns = (*scope)(nil).inside(start.Attr)
+	return decodeIn(n.Content.ns, n.Content.raw, &n.Content)
 }
 
 // NotificationContent is the element of a notification that says what
@@ -617,6 +596,11 @@ const rpcErrorName = "rpc-error"
 // prefix at all.  A statement of the configuration is written without one.
 const junosErrorTag = "<xnm:error"
 
+// maxRPCErrors is how many RPC errors, and how many warnings, are read from a
+// reply.  A reply that has this many errors has failed, and the rest of it
+// changes nothing about that.
+const maxRPCErrors = 1024
+
 // parseReply builds a Reply from a buffered rpc-reply, returning its RPC
 // errors as an error unless they are all warnings.  The reply comes with
 // them: what else the device sent can still be read.  It also comes with the
@@ -674,9 +658,14 @@ func parseReply(raw []byte) (*Reply, error) {
 			continue
 		}
 		if rpcErr.Severity == SevWarning {
-			reply.Warnings = append(reply.Warnings, rpcErr)
-		} else {
-			rpcErrors = append(rpcErrors, rpcErr)
+			if len(reply.Warnings) < maxRPCErrors {
+				reply.Warnings = append(reply.Warnings, rpcErr)
+			}
+			continue
+		}
+		rpcErrors = append(rpcErrors, rpcErr)
+		if len(rpcErrors) == maxRPCErrors {
+			return reply, rpcErrors
 		}
 	}
 

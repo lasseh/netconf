@@ -541,6 +541,17 @@ device &#195;&#184; not found
 	textCommandErrorText = "\nerror: device ø not found\n"
 )
 
+// A reply that holds something else names the first of what it holds, and keeps
+// no more than that of it.
+func TestTextOfAReplyWithoutOutput(t *testing.T) {
+	reply := &netconf.Reply{Raw: []byte(`<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><first/>` +
+		strings.Repeat(`<a/>`, 10_000) + `</rpc-reply>`)}
+
+	_, err := junos.Text(reply)
+	be.Nonzero(t, err)
+	be.In(t, "reply has <first> instead of <output>", err.Error())
+}
+
 func TestTextNotASCII(t *testing.T) {
 	ctx := context.Background()
 	filter := `<configuration><groups><name>netconf-lib-probe</name></groups></configuration>`

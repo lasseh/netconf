@@ -27,11 +27,11 @@ import (
 // The reply is read to its end for the <ok/>.  One that stops being XML
 // behind it says nothing certain either, and fails with where it stops.
 func Check(reply *netconf.Reply, name string) error {
-	oks, err := reply.Elements("ok")
+	ok, err := reply.HasElement("ok")
 	switch {
 	case err != nil:
 		return operr.Named(name, err)
-	case len(oks) > 0:
+	case ok:
 		return nil
 	}
 	err = fmt.Errorf("%w: <ok>", netconf.ErrElementNotFound)

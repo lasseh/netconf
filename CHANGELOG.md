@@ -7,6 +7,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Reply.HasElement` says whether a reply holds an element, and keeps
+  nothing of it.
 - `transporttest.RunStuck` holds a transport to close-is-cancel against a
   device that does more than go silent.
 
@@ -33,6 +35,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `WithMessageTimeout`.
 - `Session.Close` returns, and `Done` closes, when `Close` of the transport
   does not return. `Session.Close` waited for it for good.
+- A reply keeps 1024 RPC errors and 1024 warnings at most, a hello 1024 in
+  all, and a notification, the ack of an operation and `junos.Text` no longer
+  keep an element for each one in the message. A message of many small
+  elements cost dozens of times its size in heap there.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.
