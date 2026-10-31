@@ -638,7 +638,10 @@ func (cfg *dialConfig) hostKeyCheck(clientConfig *ssh.ClientConfig, addr string)
 	// connection the caller made (WithDialer) may have none.
 	callback := func(hostport string, _ net.Addr, key ssh.PublicKey) error {
 		err := known(hostport, probeAddr(hostport), key)
-		if fallback, ok := sshPortAddr(hostport); ok && isUnknownHost(err) {
+		fallback, ok := sshPortAddr(hostport)
+		// A certificate fails without saying whether the port has an entry, so
+		// that is asked with a key that is no certificate.
+		if ok && isUnknownHost(err) && isUnknownHost(known(hostport, probeAddr(hostport), probeKey{})) {
 			return known(fallback, probeAddr(fallback), key)
 		}
 		return err
@@ -662,9 +665,9 @@ func sshPortAddr(hostport string) (string, bool) {
 	return net.JoinHostPort(host, "22"), true
 }
 
-// isUnknownHost reports whether err is known_hosts having nothing on the
-// host (no key and no certificate authority), as opposed to a different or
-// a revoked key.
+// isUnknownHost reports whether err can be known_hosts having nothing on the
+// host, as opposed to a different or a revoked key.  The error of a certificate
+// says nothing on that, and counts as unknown here.
 func isUnknownHost(err error) bool {
 	if err == nil {
 		return false

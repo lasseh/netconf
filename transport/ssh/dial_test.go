@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -597,6 +598,85 @@ func TestDialHost_KnownHostsCertAuthorityPort22Entry(t *testing.T) {
 	be.NilErr(t, err)
 	readGreeting(t, tr)
 	be.NilErr(t, tr.Close())
+}
+
+// A certificate from a CA trusted for the name does not get past an entry for the
+// NETCONF port.  The plain entries are what the fallback to port 22 is for, and only
+// when the files have nothing on the port.
+func TestDialHost_CertificateDoesNotOverrideAnEntryForThePort(t *testing.T) {
+	serve := func(t *testing.T) (host string, port int, ca ssh.PublicKey) {
+		t.Helper()
+		_, caPriv, err := ed25519.GenerateKey(rand.Reader)
+		be.NilErr(t, err)
+		caSigner, err := ssh.NewSignerFromKey(caPriv)
+		be.NilErr(t, err)
+		_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+		be.NilErr(t, err)
+		hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+		be.NilErr(t, err)
+
+		srv := newTestServer(t)
+		host, port = hostPort(t, srv.Addr())
+		cert := &ssh.Certificate{
+			Key:             hostSigner.PublicKey(),
+			CertType:        ssh.HostCert,
+			ValidPrincipals: []string{host},
+			ValidBefore:     ssh.CertTimeInfinity,
+		}
+		be.NilErr(t, cert.SignCert(rand.Reader, caSigner))
+		certSigner, err := ssh.NewCertSigner(cert, hostSigner)
+		be.NilErr(t, err)
+		srv.config = &ssh.ServerConfig{NoClientAuth: true}
+		srv.config.AddHostKey(certSigner)
+		srv.Serve(greet)
+		return host, port, caSigner.PublicKey()
+	}
+	pin := func(t *testing.T) ssh.PublicKey {
+		t.Helper()
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		be.NilErr(t, err)
+		signer, err := ssh.NewSignerFromKey(priv)
+		be.NilErr(t, err)
+		return signer.PublicKey()
+	}
+	files := func(t *testing.T, lines ...string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "known_hosts")
+		be.NilErr(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+		return path
+	}
+
+	t.Run("a key on file for the port", func(t *testing.T) {
+		host, port, ca := serve(t)
+		path := files(t,
+			"@cert-authority "+knownhosts.Line([]string{host}, ca),
+			knownhosts.Line([]string{net.JoinHostPort(host, strconv.Itoa(port))}, pin(t)),
+		)
+
+		tr, err := DialHost(t.Context(), host, WithPort(port), WithPassword(""), WithKnownHosts(path))
+		if err == nil {
+			_ = tr.Close()
+		}
+		be.True(t, err != nil)
+	})
+
+	t.Run("nothing on file for the port", func(t *testing.T) {
+		host, port, ca := serve(t)
+		path := files(t, "@cert-authority "+knownhosts.Line([]string{host}, ca))
+
+		tr, err := DialHost(t.Context(), host, WithPort(port), WithPassword(""), WithKnownHosts(path))
+		be.NilErr(t, err)
+		be.NilErr(t, tr.Close())
+	})
+
+	t.Run("a CA on file for the port as well", func(t *testing.T) {
+		host, port, ca := serve(t)
+		path := files(t, "@cert-authority "+knownhosts.Line([]string{net.JoinHostPort(host, strconv.Itoa(port))}, ca))
+
+		tr, err := DialHost(t.Context(), host, WithPort(port), WithPassword(""), WithKnownHosts(path))
+		be.NilErr(t, err)
+		be.NilErr(t, tr.Close())
+	})
 }
 
 func TestPasswordPrompt(t *testing.T) {

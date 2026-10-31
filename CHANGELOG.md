@@ -53,6 +53,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `nctls.Dial` puts the host in `ServerName` under `InsecureSkipVerify` too,
   as `tls.Dial` does. A verifier that replaces the default check saw an empty
   name and skipped the check of the host. SNI now goes out in that case.
+- The fallback to port 22 in the known hosts files runs only when they have
+  no entry for the NETCONF port. It also ran for a certificate that an entry
+  for the port did not accept, so a CA trusted for the name overrode a key
+  pinned for the port.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.
