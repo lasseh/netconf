@@ -638,7 +638,8 @@ func (s *Session) nextMessageID() string {
 // close the session.
 //
 // Nobody looks inside a streamed reply.  A device that answers with an
-// rpc-error sends it in place of the data, for the reader to find, and text
+// rpc-error sends it in place of the data or next to it, for the reader to find
+// or for a type that looks, such as rpc.GetConfigReply, and text
 // that is not ASCII is the way a Junos device writes it, see "Text from
 // Junos" in the package documentation.
 func (s *Session) Stream(ctx context.Context, op any) (*Message, error) {

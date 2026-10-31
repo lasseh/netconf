@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/lasseh/netconf"
@@ -147,12 +148,17 @@ type GetConfigReply struct {
 	Config []byte
 }
 
-// UnmarshalXML implements xml.Unmarshaler.  A reply without a <data> element
-// fails with the RPC errors it carries instead, if any.
+// UnmarshalXML implements xml.Unmarshaler.  A reply that holds an RPC error, or
+// the error element of Junos, fails with it, whether or not it has a <data>
+// element as well: Config then holds what came.  Only the errors directly under
+// the reply are looked at, and one inside <data> is not found.
 func (r *GetConfigReply) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	var reply struct {
 		Errors netconf.RPCErrors `xml:"rpc-error"`
-		Data   *struct {
+		Junos  []struct {
+			Message string `xml:"message"`
+		} `xml:"error"`
+		Data *struct {
 			Inner []byte `xml:",innerxml"`
 		} `xml:"data"`
 	}
@@ -160,17 +166,32 @@ func (r *GetConfigReply) UnmarshalXML(d *xml.Decoder, start xml.StartElement) er
 		return err
 	}
 
-	// An empty configuration comes as an empty <data>; no <data> at all is
-	// a reply to something else, most likely an error.  Nothing has looked
-	// for those yet when the reply was not obtained through Exec.
-	if reply.Data == nil {
-		if len(reply.Errors) > 0 {
-			return reply.Errors
+	// Nothing has looked for errors yet when the reply was not obtained
+	// through Exec.
+	var failed netconf.RPCErrors
+	for i := range reply.Errors {
+		if reply.Errors[i].Severity != netconf.SevWarning {
+			failed = append(failed, reply.Errors[i])
 		}
-		return fmt.Errorf("get-config: %w: <data>", netconf.ErrElementNotFound)
 	}
-	r.Config = reply.Data.Inner
-	return nil
+	for _, e := range reply.Junos {
+		failed = append(failed, netconf.RPCError{Severity: netconf.SevError, Message: strings.TrimSpace(e.Message)})
+	}
+
+	// An empty configuration comes as an empty <data>; no <data> at all is
+	// a reply to something else.
+	if reply.Data != nil {
+		r.Config = reply.Data.Inner
+	}
+	switch {
+	case len(failed) > 0:
+		return failed
+	case reply.Data != nil:
+		return nil
+	case len(reply.Errors) > 0:
+		return reply.Errors
+	}
+	return fmt.Errorf("get-config: %w: <data>", netconf.ErrElementNotFound)
 }
 
 // DefaultOperation defines the strategies for merging configuration in a

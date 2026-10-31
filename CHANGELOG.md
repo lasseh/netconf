@@ -25,6 +25,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `rpc.GetConfigReply` fails on a reply that holds `<data>` and an error, as
+  `rpc.GetConfig` does. A streamed read took it for a success.
 - `OpenConfiguration` and `CloseConfiguration` fail on a reply that cannot be
   read to its end, as a lock, a load and a commit do. Such a reply counted as a
   success, and `Change{Private: true}` went on with no lock.
