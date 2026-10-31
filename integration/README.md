@@ -79,7 +79,7 @@ system `ssh` checks the host key according to its own configuration.
 
 ```bash
 NETCONF_DUT_SSHHOST=switch1.example.net \
-NETCONF_DUT_COMMAND="ssh -s -p 830 switch1.example.net netconf" \
+NETCONF_DUT_COMMAND="ssh -s -p 830 -- switch1.example.net netconf" \
 NETCONF_DUT_FLAVOR=junos \
 make integration-test
 ```
