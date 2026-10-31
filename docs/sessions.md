@@ -49,6 +49,7 @@ These causes end a session without `Close`:
 | A write fails partway through | `failed to write message`, wrapping the write error |
 | `ncssh.WithKeepalive` gives up on the device | `ncssh.ErrKeepalive` |
 | A message exceeds `WithMaxMessageSize` | `netconf.ErrMessageTooLarge` |
+| A message nests deeper than 10000 levels | `netconf.ErrMessageShape` |
 | A message stalls longer than `WithMessageTimeout` | `netconf.ErrMessageStalled` |
 | The notification queue is full | `netconf.ErrNotificationOverflow` |
 | [100 skipped messages](#untrusted-devices) in a row | `ignored 100 messages in a row`, with no sentinel |
@@ -336,6 +337,12 @@ session, not for the whole program.
   ends the session with `netconf.ErrMessageTooLarge`,
   and a hello that large fails `Open`. Nothing limits the size or duration
   of a reply read with `Session.Stream`.
+- **Message shape.** The size limit counts bytes, and a parser spends per
+  element. A buffered message nested deeper than 10000 levels ends the
+  session with `netconf.ErrMessageShape`, and a hello like that fails
+  `Open`. See
+  [Bound concurrency and memory](production-use.md#bound-concurrency-and-memory)
+  for what reading a message costs.
 - **Notification queue.** A full queue ends the session with
   `netconf.ErrNotificationOverflow`, unless `netconf.NotifQueue.Drop` is
   set. See [Notifications](#notifications).

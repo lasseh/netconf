@@ -285,6 +285,10 @@ func (s *Session) exchangeHello() error {
 	r.untimed()
 
 	raw, readErr := io.ReadAll(r)
+	// the hello does not pass through boundedReader.whole
+	if err := checkShape(raw); err != nil {
+		return &HelloError{Err: err}
+	}
 	said, err := readGreeting(raw)
 	switch {
 	case writeErr != nil:

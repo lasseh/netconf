@@ -196,7 +196,11 @@ func (b *boundedReader) whole(what string) ([]byte, error) {
 	if b.untimed() {
 		return nil, b.errStalled()
 	}
-	return b.handOn(b.head.Bytes()), nil
+	msg := b.handOn(b.head.Bytes())
+	if err := checkShape(msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // live returns the reader of the message for somebody who reads it at a pace

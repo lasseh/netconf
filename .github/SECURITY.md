@@ -50,7 +50,10 @@ release. Earlier releases are not patched.
   empty queue accepts one notification over the byte budget, up to the
   message size limit. A session ends after 100 messages in a row that it skips:
   malformed, unknown or unsolicited. These limits hold per session, not
-  for the whole program.
+  for the whole program. The size limit counts bytes, and reading a message
+  costs several times its size in memory, see
+  [Bound concurrency and memory](../docs/production-use.md#bound-concurrency-and-memory).
+  A message nested deeper than 10000 levels ends the session.
 - **Malformed input from a device.** The framing, the receive path and
   reply parsing have fuzz targets. Their seeds run with the unit tests, and
   CI fuzzes each target for five minutes every night.

@@ -102,8 +102,8 @@ An operation's context never closes it. These do:
 - the `netconf.Open` context, ending before the hello exchange is done
 - `Session.Close`
 - a write that failed partway
-- a message over `netconf.WithMaxMessageSize`, or one that stalls past
-  `netconf.WithMessageTimeout`
+- a message over `netconf.WithMaxMessageSize`, one of a shape that no parser
+  should walk, or one that stalls past `netconf.WithMessageTimeout`
 - `ncssh.WithKeepalive`, when the device stops answering
 - the end of the receive loop
 
