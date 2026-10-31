@@ -42,6 +42,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   all, and a notification, the ack of an operation and `junos.Text` no longer
   keep an element for each one in the message. A message of many small
   elements cost dozens of times its size in heap there.
+- `NotifQueue.Bytes` counts the memory a notification keeps. It counted the
+  length of the body, and a device could hold many times the budget through
+  attributes on the start tag, or a body that a repair made shorter.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.

@@ -282,6 +282,10 @@ func (s *Session) recvNotification(start *xml.StartElement, body *boundedReader)
 	if err != nil {
 		return false, err
 	}
+	// The queue counts what a message holds by its length.  The body sits in a
+	// buffer that is larger, by up to twice from its growth and by any amount
+	// when a repair or the joining of byte references made it shorter.
+	whole = bytes.Clone(whole)
 	msg := &Message{
 		body:       whole,
 		reader:     io.NopCloser(bytes.NewReader(whole)),

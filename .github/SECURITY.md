@@ -48,7 +48,8 @@ release. Earlier releases are not patched.
   256 MiB, set by `netconf.WithMaxMessageSize`, and the notification queue
   to 10,000 notifications and 64 MiB, set by `netconf.WithNotifQueue`. An
   empty queue accepts one notification over the byte budget, up to the
-  message size limit. A session ends after 100 messages in a row that it skips:
+  message size limit, and the budget is close and not exact: up to 1.25 times
+  it was measured. A session ends after 100 messages in a row that it skips:
   malformed, unknown or unsolicited. These limits hold per session, not
   for the whole program. The size limit counts bytes, and reading a message
   costs several times its size in memory, see

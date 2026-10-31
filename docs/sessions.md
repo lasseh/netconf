@@ -304,7 +304,10 @@ The handler's context is canceled at session end.
 Notifications that arrive while the handler is busy wait in a queue, by
 default up to 10,000 notifications or 64 MiB,
 `netconf.DefaultNotifQueueMessages` and `netconf.DefaultNotifQueueBytes`.
-An empty queue takes one notification above the byte budget. A
+The budget counts the bytes of a notification and what the attributes on its
+start tag take in memory, which is close to what the queue holds: up to 1.25
+times the budget was measured. An empty queue takes one notification above
+the byte budget. A
 notification that arrives at a full queue ends the session with
 `netconf.ErrNotificationOverflow`. `netconf.WithNotifQueue` changes the
 bounds. With `NotifQueue.Drop` set, the session drops what does not fit,
