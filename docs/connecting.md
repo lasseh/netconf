@@ -229,12 +229,15 @@ holds. The system `ssh` has all of that, and `nccmd.Start` from package
 `ssh -s`:
 
 ```go
-tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "router1.example.net", "netconf"))
+tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "--", "router1.example.net", "netconf"))
 if err != nil {
 	return err
 }
 session, err := netconf.Open(ctx, tr)
 ```
+
+The `--` keeps a host name from an inventory from being read as an option of
+`ssh`: a host that starts with `-oProxyCommand=` would run a command.
 
 Rules for `nccmd.Start`:
 

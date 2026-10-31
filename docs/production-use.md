@@ -73,7 +73,11 @@ When a session ends while your program still needs it:
 2. Stop using the old session. A session cannot be reopened, so dial and
    call `netconf.Open` again.
 3. Retry with exponential backoff and jitter under the worker context, so
-   shutdown ends the retries. Cap the attempts or the total time.
+   shutdown ends the retries. Cap the attempts or the total time, per device
+   over a time window, and do not reset the count when a session opens: a
+   device that ends every session it gets would keep the program reconnecting,
+   and an SSH connection that ends that way can leave memory behind, see
+   [Known limits](../.github/SECURITY.md#known-limits).
 4. Do not retry a failure that waiting does not fix: `ncssh.ErrAuth`, a
    `*knownhosts.KeyError` or `*knownhosts.RevokedError`,
    `ncssh.ErrSubsystemRefused`, or a `*netconf.HelloError` with RPC errors

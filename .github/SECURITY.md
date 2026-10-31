@@ -79,10 +79,22 @@ These limits follow from the protocol or are left to the caller.
   fails against a device that speaks only base:1.0.
 - A message that the device begins and never finishes holds the session,
   and every operation on it waits for its own context, unless
-  `netconf.WithMessageTimeout` is set.
+  `netconf.WithMessageTimeout` is set. That option times the gap between
+  bytes and not the message, so a device that sends a byte in each interval
+  holds the session with it set, and white space between messages is not
+  timed at all.
 - A reply requested with `Session.Stream` is not limited in size or time.
 - `transport.Framer.DebugCapture` copies whole messages, secrets included.
   `netconf.OperationInfo.Request` in a trace and `netconf.SyntaxError.Around`
   hold message bytes too.
 - `junos.Command` is one line of CLI. Building it from untrusted input lets
-  that input choose the command.
+  that input choose the command. The same goes for a value put into
+  `junos.FormatSet` text: a line break in it starts a new command.
+- `golang.org/x/crypto/ssh` can leave 3 or 4 goroutines and from 16 KB to about
+  4.5 MB of heap behind for each SSH connection a trusted device breaks or
+  stops, until the process exits. Closing the transport returns all the same.
+  A program that reconnects to such a device without a limit adds to that, see
+  [Reconnect without replaying writes](../docs/production-use.md#reconnect-without-replaying-writes).
+  One way there is a key exchange, which starts after 1 GiB with
+  chacha20-poly1305. Setting `ssh.Config.Ciphers` to AES-GCM through
+  `ncssh.WithClientConfig` makes that 64 GiB.

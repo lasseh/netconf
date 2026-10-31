@@ -5,7 +5,7 @@
 // client of package ssh does not: ProxyCommand, a jump host behind a jump
 // host, connection sharing, Kerberos, a key on a hardware token.
 //
-//	tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "router1", "netconf"))
+//	tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "--", "router1", "netconf"))
 //	if err != nil { ... }
 //	session, err := netconf.Open(ctx, tr)
 //
