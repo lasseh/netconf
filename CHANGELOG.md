@@ -22,6 +22,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when a device gets a key exchange stuck, also during a login through a
   jump host. Closing the connection wakes nothing then, so they hung for as
   long as the process lived.
+- `Transport.Close` of `transport/tls` returns when a TLS 1.3 device stops
+  reading and asks for key updates. It waited on the device for good, and
+  with it the context of `Open`, the context of `Session.Close` and
+  `WithMessageTimeout`.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.

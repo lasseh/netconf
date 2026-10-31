@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"time"
 
 	"github.com/lasseh/netconf/transport"
 )
@@ -72,7 +73,18 @@ func NewTransport(conn *tls.Conn) *Transport {
 	}
 }
 
+// closeWait is how long Close gives close_notify before it closes the socket.
+const closeWait = time.Second
+
 // Close will close the transport and the underlying TLS connection.
+//
+// tls.Conn.Close takes the write lock for its close_notify before it sets a
+// deadline, and a read that answers a device's KeyUpdate holds that lock through
+// a socket write with no deadline.  Close is what cancels everything else, so it
+// must not wait for a device that stopped reading: the socket is closed under a
+// timer, which ends that write.
 func (t *Transport) Close() error {
+	timer := time.AfterFunc(closeWait, func() { _ = t.conn.NetConn().Close() })
+	defer timer.Stop()
 	return t.conn.Close()
 }
