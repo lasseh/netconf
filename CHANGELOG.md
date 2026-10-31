@@ -50,6 +50,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nested elements that declare a namespace fail the read, and
   `junos.GetCommitInformation` and `junos.GetDatabaseStatusInformation` stop
   between elements when their context ends.
+- `nctls.Dial` puts the host in `ServerName` under `InsecureSkipVerify` too,
+  as `tls.Dial` does. A verifier that replaces the default check saw an empty
+  name and skipped the check of the host. SNI now goes out in that case.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.

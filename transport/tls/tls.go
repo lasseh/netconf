@@ -39,19 +39,23 @@ func Dial(ctx context.Context, network, addr string, config *tls.Config) (*Trans
 		return nil, err
 	}
 
-	// Like tls.Dial, verify the certificate against the host being dialed
-	// unless the caller chose a name.
+	// Like tls.Dial, take the host being dialed for the name unless the caller
+	// chose one.  That goes for InsecureSkipVerify as well: a verifier that
+	// replaces the default check finds the name on the connection.  Only the
+	// default check cannot do without one.
 	if config == nil {
 		config = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	if config.ServerName == "" && !config.InsecureSkipVerify {
+	if config.ServerName == "" {
 		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
+		switch {
+		case err == nil:
+			config = config.Clone()
+			config.ServerName = host
+		case !config.InsecureSkipVerify:
 			_ = conn.Close()
 			return nil, err
 		}
-		config = config.Clone()
-		config.ServerName = host
 	}
 
 	tlsConn := tls.Client(conn, config)
