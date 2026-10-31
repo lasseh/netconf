@@ -25,6 +25,8 @@ import (
 	"github.com/carlmjohnson/be"
 
 	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/transport"
+	"github.com/lasseh/netconf/transport/transporttest"
 )
 
 // A TLS 1.3 device can ask the client to update its keys, and crypto/tls answers
@@ -351,6 +353,19 @@ func TestKeyUpdateStall_SessionCloseContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The contract of a transport holds with the read path stuck in a write.
+func TestTransportConformance_Stuck(t *testing.T) {
+	transporttest.RunStuck(t, func(t *testing.T) (transport.Transport, func()) {
+		device, tr := connectFlooding(t)
+		stop := make(chan struct{})
+		t.Cleanup(func() { close(stop) })
+		return tr, func() {
+			go device.flood(t, stop)
+			waitForTheStall(t, device)
+		}
+	})
 }
 
 // A close with nothing in the way still says goodbye.

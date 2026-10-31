@@ -48,7 +48,7 @@ func (s *Session) recvLoop() {
 	}
 
 	// last, so the session has nothing left to do or say once it is done
-	close(s.done)
+	s.finish()
 }
 
 var (

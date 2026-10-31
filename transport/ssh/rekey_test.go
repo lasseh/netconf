@@ -18,6 +18,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lasseh/netconf"
+	"github.com/lasseh/netconf/transport"
+	"github.com/lasseh/netconf/transport/transporttest"
 )
 
 // A device can get a key exchange that the client started stuck for good.  It
@@ -402,6 +404,45 @@ func TestStuckKeyExchange_DuringTheLoginThroughAJumpHost(t *testing.T) {
 			{addr: device, config: &ssh.ClientConfig{User: "admin", HostKeyCallback: ssh.InsecureIgnoreHostKey()}}, //nolint:gosec // a test device
 		}, nil, "")
 		be.True(t, err != nil)
+	})
+}
+
+// The contract of a transport holds for all of the ways a device can get
+// x/crypto stuck.
+func TestTransportConformance_Stuck(t *testing.T) {
+	t.Run("a stuck key exchange", func(t *testing.T) {
+		transporttest.RunStuck(t, func(t *testing.T) (transport.Transport, func()) {
+			d := newRekeyDevice(t, true, false)
+			tr, err := d.dial(t.Context())
+			be.NilErr(t, err)
+			<-d.asked
+			<-d.ready
+			return tr, func() { d.stall(99) }
+		})
+	})
+
+	t.Run("channel requests x/crypto cannot read", func(t *testing.T) {
+		transporttest.RunStuck(t, func(t *testing.T) (transport.Transport, func()) {
+			srv := newTestServer(t)
+			srv.SubsystemAnswered = make(chan struct{})
+			start, sent, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			srv.Serve(func(ch ssh.Channel) error {
+				<-srv.SubsystemAnswered
+				<-start
+				flood(ch, "exit-status", []byte{0})
+				close(sent)
+				<-release
+				return nil
+			})
+			tr, err := dialDevice(t.Context(), t, srv)
+			be.NilErr(t, err)
+			return tr, func() {
+				close(start)
+				<-sent
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
 	})
 }
 

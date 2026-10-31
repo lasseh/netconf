@@ -15,6 +15,7 @@ import (
 	"github.com/carlmjohnson/be"
 
 	"github.com/lasseh/netconf/internal/netconftest"
+	"github.com/lasseh/netconf/transport"
 )
 
 const (
@@ -676,6 +677,51 @@ func TestCloseTransportError(t *testing.T) {
 	err = session.Close(context.Background())
 	be.Nonzero(t, err)
 	be.True(t, errors.Is(err, customErr))
+}
+
+// stuckTransport has a Close that does not return, which breaks the contract.
+type stuckTransport struct {
+	transport.Transport
+	release chan struct{}
+}
+
+func (s *stuckTransport) Close() error {
+	<-s.release
+	return s.Transport.Close()
+}
+
+// A transport that breaks close-is-cancel holds neither the caller nor Done.
+func TestCloseTransportThatDoesNotClose(t *testing.T) {
+	old := closeGrace
+	closeGrace = 50 * time.Millisecond
+	t.Cleanup(func() { closeGrace = old })
+
+	st := &stuckTransport{Transport: netconftest.NewTransport(t, echoHandler), release: make(chan struct{})}
+	t.Cleanup(func() { close(st.release) })
+
+	session, err := Open(context.Background(), st)
+	be.NilErr(t, err)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- session.Close(ctx) }()
+
+	select {
+	case err := <-closed:
+		be.Nonzero(t, err)
+		be.In(t, "the transport did not close", err.Error())
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("Done did not close")
+	}
+
+	// a second call has nothing left to wait for
+	be.NilErr(t, session.Close(context.Background()))
 }
 
 func TestNotificationHandler(t *testing.T) {

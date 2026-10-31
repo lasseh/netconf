@@ -286,6 +286,41 @@ func Run(t *testing.T, newPair func(t *testing.T) (transport.Transport, Peer)) {
 	})
 }
 
+// RunStuck holds close-is-cancel against a device that does more than go silent.
+// A silent device leaves the transport with nothing to do.  A device can also get
+// what is under a transport stuck, with the transport's goroutines in a write its
+// read depends on or in a wait nothing wakes, and closing the connection does not
+// always end that.  What that takes differs per adapter, so it is the adapter's to
+// script.
+//
+// newStuck returns a fresh connected transport, and stick, which has the device do
+// that.  stick is called with a read in progress, and returns once the transport
+// is stuck.  Close must then return, and release the read.
+func RunStuck(t *testing.T, newStuck func(t *testing.T) (tr transport.Transport, stick func())) {
+	t.Helper()
+	tr, stick := newStuck(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r, err := tr.MsgReader()
+		if err != nil {
+			return
+		}
+		_, _ = io.ReadAll(r)
+	}()
+
+	stick()
+	closeWithin(t, tr)
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatal("Read did not unblock within timeout after Close")
+	}
+	assertNoBlockingIO(t, tr)
+}
+
 // roundTrip writes msg from the client (draining it on the peer) and then has
 // the peer echo it back for the client to read, asserting both directions
 // deliver msg intact and that the reader latches EOF.

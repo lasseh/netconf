@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- `transporttest.RunStuck` holds a transport to close-is-cancel against a
+  device that does more than go silent.
+
 ### Changed
 
 - The `rpc` operations and `rpc.ExecOK` read the `<ok/>` the way the
@@ -26,6 +31,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reading and asks for key updates. It waited on the device for good, and
   with it the context of `Open`, the context of `Session.Close` and
   `WithMessageTimeout`.
+- `Session.Close` returns, and `Done` closes, when `Close` of the transport
+  does not return. `Session.Close` waited for it for good.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.
