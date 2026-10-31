@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lasseh/netconf/internal/tail"
 	"github.com/lasseh/netconf/internal/xmlutil"
 )
 
@@ -44,7 +45,8 @@ func (s *Session) recvLoop() {
 	_ = s.closeTransport()
 
 	if !closing {
-		s.logger.Warn("session closed unexpectedly", "error", s.Err())
+		// not s.Err().Error(): it is nil when Close won the race for it
+		s.logger.Warn("session closed unexpectedly", "error", logValue(fmt.Sprint(s.Err())))
 	}
 
 	// last, so the session has nothing left to do or say once it is done
@@ -91,7 +93,7 @@ func (s *Session) recvMsg() (delivered bool, err error) {
 		// The frame holds no XML element (empty, or not XML at all).  That
 		// is the peer's mistake in one message, not a broken stream: the
 		// reader is still drained to the frame boundary on close.
-		s.logger.Warn("skipping malformed message", "error", err)
+		s.logger.Warn("skipping malformed message", "error", logValue(err.Error()))
 		return false, nil
 	default:
 		return false, fmt.Errorf("failed to read message: %w", err)
@@ -298,10 +300,12 @@ func (s *Session) recvNotification(start *xml.StartElement, body *boundedReader)
 	return true, nil
 }
 
-// logValue shortens a server-supplied string for logging.
+// logValue shortens a server-supplied string for logging, and keeps it on one
+// line and free of what a terminal or a log reader acts on.
 func logValue(s string) string {
+	cut := ""
 	if len(s) > maxLogValue {
-		return s[:maxLogValue] + "..."
+		s, cut = strings.ToValidUTF8(s[:maxLogValue], ""), "..."
 	}
-	return s
+	return strings.Join(strings.Fields(tail.Printable(s)), " ") + cut
 }

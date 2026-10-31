@@ -25,6 +25,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Two log records carried device text past the 128 bytes of the others: a
+  skipped malformed message and the end of a session. `Session.Err` keeps the
+  whole text.
+- Device text in a log record, and what a device or `ssh` wrote to standard
+  error in an error, comes without control characters.
 - `junos.LoadConfiguration`, and with it `Change`, refuses an override or update
   with nothing in it, and `rpc.EditConfig` an empty config with
   `default-operation` replace, before anything is sent. Junos takes both and is
