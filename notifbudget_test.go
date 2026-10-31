@@ -14,15 +14,27 @@ import (
 )
 
 // budgetSession opens a session whose handler stays busy, on a device that says
-// hello and then sends notification until the queue drops one.
+// hello and then sends notification until the queue drops one.  It returns once the
+// device has stopped, so that what is held then is what the queue holds.
 func budgetSession(t *testing.T, hello, notification string, budget int64, opts ...SessionOption) *Session {
 	t.Helper()
 
 	wire, dev := netconftest.NewWire(t)
+	stop, stopped := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(stopped)
 		_, _ = dev.Recv()
 		_ = dev.WriteRaw(hello)
-		flood(dev, notification+"]]>]]>")
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if dev.WriteRaw(notification+"]]>]]>") != nil {
+				return
+			}
+		}
 	}()
 
 	release := make(chan struct{})
@@ -44,6 +56,10 @@ func budgetSession(t *testing.T, hello, notification string, budget int64, opts 
 		dropped := sess.notif.dropped
 		sess.notif.mu.Unlock()
 		if dropped > 0 {
+			close(stop)
+			<-stopped
+			// the last message on its way through the session
+			time.Sleep(50 * time.Millisecond)
 			return sess
 		}
 		time.Sleep(time.Millisecond)
