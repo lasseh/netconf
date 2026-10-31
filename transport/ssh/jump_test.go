@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
@@ -456,9 +457,117 @@ func recordAuth(srv *testServer, accept ssh.PublicKey) *offered {
 	return o
 }
 
-// What the caller says about the device is for the device.  A jump host
-// never gets to see the device's password, key or user name: it is logged in
-// to with the identity files and the agent, the way ssh does it.
+// channelConn is an ssh channel as a net.Conn.
+type channelConn struct{ ssh.Channel }
+
+func (channelConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (channelConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (channelConn) SetDeadline(time.Time) error      { return nil }
+func (channelConn) SetReadDeadline(time.Time) error  { return nil }
+func (channelConn) SetWriteDeadline(time.Time) error { return nil }
+
+// serveHostileJump is a jump host that does not connect on when it is asked to: it
+// ends the leg to the device itself, as an ssh server with a key of its own.  What
+// it is told as a password comes out of the channel it returns.
+func serveHostileJump(srv *testServer) <-chan string {
+	stolen := make(chan string, 1)
+	srv.t.Cleanup(func() { _ = srv.listener.Close() })
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		srv.t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		srv.t.Fatal(err)
+	}
+	device := &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+		stolen <- string(password)
+		return nil, errors.New("no")
+	}}
+	device.AddHostKey(signer)
+
+	go func() {
+		conn, err := srv.listener.Accept()
+		if err != nil {
+			return
+		}
+		sc, chans, reqs, err := ssh.NewServerConn(conn, srv.config)
+		if err != nil {
+			return
+		}
+		defer func() { _ = sc.Close() }()
+		go ssh.DiscardRequests(reqs)
+
+		for newChannel := range chans {
+			ch, in, err := newChannel.Accept()
+			if err != nil {
+				return
+			}
+			go ssh.DiscardRequests(in)
+			go func() { _, _, _, _ = ssh.NewServerConn(channelConn{ch}, device) }()
+		}
+	}()
+	return stolen
+}
+
+// The login to a jump host never uses the device's password.  The leg to the
+// device runs through it all the same, so what keeps the password from it is the
+// host key of the device: with that check off, it can end the leg itself.
+func TestDialHost_HostileJumpHost(t *testing.T) {
+	const password = "dummy-device-password"
+
+	dial := func(t *testing.T, check DialOption) (<-chan string, error) {
+		t.Helper()
+		home, _ := sshHome(t)
+		jump := newTestServer(t)
+		stolen := serveHostileJump(jump)
+		trust(t, home, jump.Addr(), jump.hostKey)
+
+		ctx, cancel := context.WithTimeout(t.Context(), stuckAfter)
+		defer cancel()
+		tr, err := DialHost(ctx, "device.example.net",
+			WithUser("automation"),
+			WithPassword(password),
+			WithProxyJump(jump.Addr()),
+			check,
+		)
+		if err == nil {
+			_ = tr.Close()
+		}
+		return stolen, err
+	}
+
+	t.Run("with the device's key checked it gets nothing", func(t *testing.T) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		be.NilErr(t, err)
+		signer, err := ssh.NewSignerFromKey(priv)
+		be.NilErr(t, err)
+
+		stolen, err := dial(t, WithHostKey(signer.PublicKey()))
+		be.True(t, err != nil)
+		select {
+		case got := <-stolen:
+			t.Fatalf("the jump host read %q", got)
+		default:
+		}
+	})
+
+	t.Run("with the check off it can read the password", func(t *testing.T) {
+		stolen, err := dial(t, WithInsecureIgnoreHostKey())
+		be.True(t, err != nil) // it refuses the login it was after
+		select {
+		case got := <-stolen:
+			be.Equal(t, password, got)
+		case <-time.After(stuckAfter):
+			t.Fatal("the jump host read nothing")
+		}
+	})
+}
+
+// What the caller says about the device is for the device.  The login to a jump
+// host never uses the device's password, key or user name: it is logged in to
+// with the identity files and the agent, the way ssh does it.
 func TestDialHost_ProxyJumpCredentials(t *testing.T) {
 	osUser, err := user.Current()
 	be.NilErr(t, err)

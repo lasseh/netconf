@@ -25,6 +25,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `.github/SECURITY.md` and `WithProxyJump` say what holds for a jump host: the
+  device's password stays out of its reach only while the device's host key is
+  checked.
 - A device can no longer stop the read loop of an SSH connection with
   channel requests that `x/crypto/ssh` cannot read. `Transport.Close`,
   contexts, the keepalive and the message timeout ended nothing after that.

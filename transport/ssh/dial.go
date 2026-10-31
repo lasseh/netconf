@@ -205,10 +205,13 @@ func WithSSHConfig(path string) DialOption {
 // the keys of the ssh-agent and ~/.ssh/id_ed25519, id_ecdsa and id_rsa,
 // unless the jump host as written or its block in the ssh config (see
 // WithSSHConfig: HostName, User, Port, IdentityFile, UserKnownHostsFile)
-// says otherwise.  It never gets to see the password.  Its host key always
-// has to be among the known hosts, see WithKnownHosts: a jump host that is
-// new is refused, also where the ssh config has ssh accept it
-// (StrictHostKeyChecking no or accept-new).
+// says otherwise.  Its login never uses the password.  The device leg keeps the
+// password from it only while the device's host key is checked: with
+// WithInsecureIgnoreHostKey or a permissive callback from WithClientConfig, it
+// can end that leg itself and read the password.  Its host key always has to be
+// among the known hosts, see WithKnownHosts: a jump host that is new is refused,
+// also where the ssh config has ssh accept it (StrictHostKeyChecking no or
+// accept-new).
 //
 // A jump host whose block in the ssh config names a ProxyJump of its own is
 // refused: name every jump host on the way, in order.
