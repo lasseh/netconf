@@ -25,6 +25,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `junos.LoadConfiguration`, and with it `Change`, refuses an override or update
+  with nothing in it, and `rpc.EditConfig` an empty config with
+  `default-operation` replace, before anything is sent. Junos takes both and is
+  left with an empty candidate. `rpc.Config{Payload: ""}` says that it is meant.
 - A commit or a confirmation whose reply holds an error next to `<ok/>` or
   `<commit-success/>` gives `junos.ErrCommitUnknown`. It read as a refusal, which
   says that nothing was committed.

@@ -224,7 +224,11 @@ patch, see
 `Apply` refuses a `Change` before it sends anything when `Config` is
 missing, `Comment` or `Confirm` is over its limit, or the format or action
 is unknown or does not fit, such as an `Action` for set commands,
-`junos.LoadReplace` for JSON, or a patch in a format other than text.
+`junos.LoadReplace` for JSON, or a patch in a format other than text. It also
+refuses a `junos.LoadOverride` or `junos.LoadUpdate` with nothing in `Config`:
+an empty string, white space or an empty `<configuration/>`, which would leave
+an empty candidate. An override that holds little is not refused, and commits:
+`Review` and `Confirm` are there for that.
 
 `Apply` and `junos.LoadConfiguration` write each JSON escape that has a
 literal form, such as the `\u0026` that `encoding/json` writes for `&`,

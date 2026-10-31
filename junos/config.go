@@ -270,14 +270,18 @@ type LoadConfiguration struct {
 }
 
 // MarshalXML implements xml.Marshaler.  It fails for an unknown Format or
-// Action, a combination Junos does not have, a missing Config, and a Config
-// together with a URL.
+// Action, a combination Junos does not have, a missing Config, a Config together
+// with a URL, and an override or update with nothing in it, which is a failed
+// read or an empty template in the program: Junos takes it, and is left with an
+// empty candidate.
 func (op LoadConfiguration) MarshalXML(e *xml.Encoder, _ xml.StartElement) error {
 	switch {
 	case op.Config == nil && op.URL == "":
 		return errors.New("load-configuration: config cannot be nil")
 	case op.Config != nil && op.URL != "":
 		return errors.New("load-configuration: give Config or URL, not both")
+	case (op.Action == LoadOverride || op.Action == LoadUpdate) && op.URL == "" && xmlutil.IsEmpty(op.Config):
+		return fmt.Errorf("load-configuration: an empty %s would empty the candidate", op.Action)
 	}
 	switch op.Action {
 	case "", LoadMerge, LoadOverride, LoadReplace, LoadUpdate, LoadPatch:

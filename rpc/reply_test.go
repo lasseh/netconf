@@ -130,6 +130,26 @@ func TestPartialLock_ExecWithoutLockID(t *testing.T) {
 	be.In(t, "<lock-id>", err.Error())
 }
 
+// With default-operation replace an empty config empties the target.  Junos
+// answers that with <ok/>, so it has to be meant.
+func TestEditConfig_EmptyReplace(t *testing.T) {
+	var noBytes []byte
+	for _, config := range []any{"", " \n", noBytes, "<configuration/>"} {
+		_, err := xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: ReplaceConfig, Config: config})
+		be.Nonzero(t, err)
+		be.In(t, "would empty the target", err.Error())
+
+		// with any other operation it changes nothing
+		_, err = xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: MergeConfig, Config: config})
+		be.NilErr(t, err)
+	}
+
+	// the way to mean it
+	out, err := xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: ReplaceConfig, Config: Config{Payload: ""}})
+	be.NilErr(t, err)
+	be.In(t, "<config></config>", string(out))
+}
+
 // Config is the inline source of copy-config and validate.  Given to
 // edit-config it is the configuration itself, not a value to wrap again.
 func TestEditConfig_ConfigValue(t *testing.T) {

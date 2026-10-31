@@ -1002,6 +1002,13 @@ func TestChangeApply_RefusedUnsent(t *testing.T) {
 		says   string
 	}{
 		{"nothing to load", junos.Change{}, "config cannot be nil"},
+		// Junos takes these, and what it is left with is an empty candidate.
+		{"an empty override", junos.Change{Format: junos.FormatText, Action: junos.LoadOverride, Config: ""}, "would empty the candidate"},
+		{"an override of nil bytes", junos.Change{Format: junos.FormatText, Action: junos.LoadOverride, Config: []byte(nil)}, "would empty the candidate"},
+		{"a blank override", junos.Change{Format: junos.FormatText, Action: junos.LoadOverride, Config: " \n"}, "would empty the candidate"},
+		{"an empty override in XML", junos.Change{Format: junos.FormatXML, Action: junos.LoadOverride, Config: ""}, "would empty the candidate"},
+		{"an empty configuration as an override", junos.Change{Format: junos.FormatXML, Action: junos.LoadOverride, Config: "<configuration/>"}, "would empty the candidate"},
+		{"an empty update", junos.Change{Format: junos.FormatText, Action: junos.LoadUpdate, Config: ""}, "would empty the candidate"},
 		{"unknown format", junos.Change{Format: "yaml", Config: "x"}, `unknown format "yaml"`},
 		{"an action for set commands", junos.Change{Format: junos.FormatSet, Action: junos.LoadOverride, Config: "x"}, "does not apply to set commands"},
 		{"confirm time below zero", junos.Change{Config: "<configuration/>", Confirm: -time.Minute}, "cannot be negative"},
