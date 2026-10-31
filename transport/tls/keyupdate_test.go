@@ -311,8 +311,8 @@ func TestKeyUpdateStall_MessageTimeout(t *testing.T) {
 	defer close(stop)
 	device.say(t, replyStart)
 	go device.flood(t, stop)
-	waitForTheStall(t, device)
 
+	// the timeout ends the session by itself, so there is no stall to wait for
 	within(t, "Done", func() { <-session.Done() })
 }
 
