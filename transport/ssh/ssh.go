@@ -45,8 +45,7 @@ type Transport struct {
 	// for a transport on somebody else's connection.
 	conn io.Closer
 
-	// release cuts a transport on somebody else's connection off from its
-	// channel, see newTransport.  It is nil for a transport with a conn.
+	// release cuts the transport off from its channel, see newTransport.
 	release func()
 
 	closeOnce sync.Once
@@ -182,10 +181,12 @@ func dial(ctx context.Context, network string, hops []hop, connect dialFunc, com
 	// doing is what the dial is busy with.  When the context ends the dial,
 	// that is what its error says: the error of the step itself is then no
 	// more than a connection that was closed under it.
-	doing := "connecting to " + hops[0].String()
+	var doing atomic.Pointer[string]
+	step := func(what string) { doing.Store(&what) }
+	step("connecting to " + hops[0].String())
 	interrupted := func(err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("%s: %w", doing, ctxErr)
+			return fmt.Errorf("%s: %w", *doing.Load(), ctxErr)
 		}
 		return err
 	}
@@ -203,9 +204,9 @@ func dial(ctx context.Context, network string, hops []hop, connect dialFunc, com
 			if !isNil(first) {
 				_ = first.Close()
 			}
-			err = fmt.Errorf("%s: %w", doing, err)
+			err = fmt.Errorf("%s: %w", *doing.Load(), err)
 		case isNil(first):
-			err = fmt.Errorf("%s: the function given to WithDialer returned no connection", doing)
+			err = fmt.Errorf("%s: the function given to WithDialer returned no connection", *doing.Load())
 		}
 	} else {
 		d := net.Dialer{Timeout: hops[0].config.Timeout}
@@ -231,31 +232,34 @@ func dial(ctx context.Context, network string, hops []hop, connect dialFunc, com
 		return nil, interrupted(err)
 	}
 
-	var clients []*ssh.Client
-	for i, h := range hops {
-		conn := first
-		if i > 0 {
-			doing = fmt.Sprintf("connecting to %s through jump host %s", h, hops[i-1].jump)
-			if conn, err = clients[i-1].DialContext(ctx, "tcp", h.addr); err != nil {
-				return fail(fmt.Errorf("failed to connect to %s through jump host %s: %w", h.addr, hops[i-1].jump, err))
+	// Everything from here on waits on x/crypto, and closing the connection
+	// does not end those waits when a key exchange is stuck: nothing is reading
+	// the socket then.  So the dial does not wait for them past its context, and
+	// whatever comes of them after that is closed.
+	type started struct {
+		t   *Transport
+		err error
+	}
+	done := make(chan started, 1)
+	go func() {
+		t, err := connectHops(ctx, first, hops, command, step)
+		done <- started{t, err}
+	}()
+
+	var t *Transport
+	select {
+	case s := <-done:
+		if s.err != nil {
+			return fail(s.err)
+		}
+		t = s.t
+	case <-ctx.Done():
+		go func() {
+			if s := <-done; s.t != nil {
+				_ = s.t.Close()
 			}
-		}
-
-		doing = "ssh handshake with " + h.String()
-		sshConn, chans, reqs, err := h.login(conn)
-		if err != nil {
-			return fail(h.failed(err))
-		}
-		clients = append(clients, ssh.NewClient(sshConn, chans, reqs))
-	}
-
-	doing = "starting the netconf subsystem on " + hops[len(hops)-1].addr
-	if command != "" {
-		doing = fmt.Sprintf("running %q on %s", command, hops[len(hops)-1].addr)
-	}
-	t, err := newTransport(clients[len(clients)-1], clients[0], command)
-	if err != nil {
-		return fail(err)
+		}()
+		return fail(ctx.Err())
 	}
 
 	// stop() returning false means the context already fired and the AfterFunc
@@ -266,6 +270,37 @@ func dial(ctx context.Context, network string, hops []hop, connect dialFunc, com
 	}
 
 	return t, nil
+}
+
+// connectHops logs in to each hop over the one before it, starting on first,
+// and starts NETCONF on the last.  step is told what it is busy with.
+func connectHops(ctx context.Context, first net.Conn, hops []hop, command string, step func(string)) (*Transport, error) {
+	var clients []*ssh.Client
+	for i, h := range hops {
+		conn := first
+		if i > 0 {
+			step(fmt.Sprintf("connecting to %s through jump host %s", h, hops[i-1].jump))
+			var err error
+			if conn, err = clients[i-1].DialContext(ctx, "tcp", h.addr); err != nil {
+				return nil, fmt.Errorf("failed to connect to %s through jump host %s: %w", h.addr, hops[i-1].jump, err)
+			}
+		}
+
+		step("ssh handshake with " + h.String())
+		sshConn, chans, reqs, err := h.login(conn)
+		if err != nil {
+			return nil, h.failed(err)
+		}
+		clients = append(clients, ssh.NewClient(sshConn, chans, reqs))
+	}
+
+	last := hops[len(hops)-1]
+	if command != "" {
+		step(fmt.Sprintf("running %q on %s", command, last.addr))
+	} else {
+		step("starting the netconf subsystem on " + last.addr)
+	}
+	return newTransport(clients[len(clients)-1], clients[0], command)
 }
 
 // String names the hop in an error: a jump host by the name it was given,
@@ -385,20 +420,16 @@ func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transpor
 
 	t := &Transport{
 		c:      client,
+		conn:   conn,
 		closed: make(chan struct{}),
 	}
 
-	if conn != nil {
-		t.conn = conn
-		t.framer = transport.NewFramer(stdout, stdin)
-		return t, nil
-	}
-
-	// The connection is the caller's, so closing it is not how this
-	// transport gets out of IO stuck on a device that stopped answering,
-	// and an ssh channel offers nothing else.  The framer therefore works on
-	// two pipes that Close can cut, and the channel behind them is left to
-	// two goroutines that end when it does.
+	// Closing the connection is not how a transport gets out of IO stuck on a
+	// device.  Somebody else's connection is not ours to close, and when
+	// x/crypto is stuck in a key exchange nothing reads the socket that closing
+	// it could wake.  An ssh channel offers nothing else, so the framer works on
+	// two pipes that Close can cut, and the channel behind them is left to two
+	// goroutines that end when it does.
 	inR, inW := io.Pipe()
 	go func() {
 		_, err := io.Copy(inW, stdout)
@@ -450,8 +481,12 @@ func (t *Transport) Close() error {
 // x/crypto/ssh sends the channel's EOF and close behind any write still in
 // flight, and a write to a peer that stopped reading stays in flight.
 func (t *Transport) close() error {
+	// Whatever x/crypto is doing, this releases everything blocked on the
+	// transport.
+	t.release()
+
 	// A connection the transport made is the transport's to close, which
-	// takes the channel with it and releases everything blocked on either.
+	// takes the channel with it.
 	//
 	// Through jump hosts it is the connection to the first of them and no
 	// other: that one is a network connection, closed without a word to
@@ -462,10 +497,7 @@ func (t *Transport) close() error {
 		if err := t.conn.Close(); err != nil {
 			return fmt.Errorf("failed to close ssh connection: %w", err)
 		}
-		return nil
 	}
-
-	t.release()
 	return nil
 }
 
