@@ -328,6 +328,9 @@ func jsonText(object map[string]any, name string) string {
 // touched.
 //
 // A reply without the element fails with netconf.ErrElementNotFound.
+//
+// Decode takes no context.  The reply is here by then, and reading one that holds
+// many elements takes as long as it takes.
 func Decode(reply *netconf.Reply, name string, v any) error {
 	target := reflect.ValueOf(v)
 	if target.Kind() != reflect.Pointer || target.IsNil() {

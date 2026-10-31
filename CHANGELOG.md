@@ -45,6 +45,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `NotifQueue.Bytes` counts the memory a notification keeps. It counted the
   length of the body, and a device could hold many times the budget through
   attributes on the start tag, or a body that a repair made shorter.
+- Decoding the elements of a reply takes time in proportion to the reply. It
+  took declarations times elements, with no way to stop it. More than 1024
+  nested elements that declare a namespace fail the read, and
+  `junos.GetCommitInformation` and `junos.GetDatabaseStatusInformation` stop
+  between elements when their context ends.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.

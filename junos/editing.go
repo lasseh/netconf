@@ -91,6 +91,11 @@ func (op GetDatabaseStatusInformation) exec(ctx context.Context, session *netcon
 
 	sessions := make([]EditSession, 0, len(found))
 	for _, el := range found {
+		// the reply is here, and reading it can take long: a device decides
+		// what is in it
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var entry struct {
 			PID      int    `xml:"pid"`
 			User     string `xml:"user"`

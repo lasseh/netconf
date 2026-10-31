@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 )
 
@@ -57,10 +56,21 @@ func (e Element) Decode(v any) error {
 // around it.  An element that declares nothing has the scope of its parent,
 // so the many elements of one result share one.
 type scope struct {
-	// decls is the xmlns attributes of the element
-	decls  []xml.Attr
+	// values is the namespace of each prefix the element declares, under ""
+	// for the default namespace
+	values map[string]string
 	parent *scope
+
+	// depth is how many scopes there are, this one and those around it
+	depth int
 }
+
+// maxScopes is how many nested elements of a reply may declare namespaces.  What
+// a decode costs grows with it, and a real reply has a handful.
+const maxScopes = 1024
+
+// errTooManyScopes is what reading a reply with more than maxScopes fails with.
+var errTooManyScopes = errors.New("too many nested namespace declarations")
 
 // xmlns is the name of the attribute that declares the default namespace,
 // and the Space encoding/xml gives one that declares a prefix.
@@ -85,49 +95,74 @@ func (s *scope) inside(attrs []xml.Attr) *scope {
 		return s
 	}
 
-	decls := make([]xml.Attr, 0, n)
+	values := make(map[string]string, n)
 	for _, attr := range attrs {
-		if isNamespace(attr.Name) {
-			decls = append(decls, attr)
+		// encoding/xml takes the last of two declarations on one element
+		switch {
+		case attr.Name.Space == xmlns:
+			values[attr.Name.Local] = attr.Value
+		case attr.Name.Space == "" && attr.Name.Local == xmlns:
+			values[""] = attr.Value
 		}
 	}
-	return &scope{decls: decls, parent: s}
+	depth := 1
+	if s != nil {
+		depth = s.depth + 1
+	}
+	return &scope{values: values, parent: s, depth: depth}
 }
 
-// open returns the start tag of an element that declares what s has in
-// force, and nothing when that is nothing.
-func (s *scope) open() string {
+// lookup returns the nearest declaration of prefix.
+func (s *scope) lookup(prefix string) (string, bool) {
+	for ; s != nil; s = s.parent {
+		if value, ok := s.values[prefix]; ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// usedPrefixes returns the prefixes raw writes names with, and the default
+// namespace.
+func usedPrefixes(raw []byte) map[string]struct{} {
+	used := map[string]struct{}{"": {}}
+	d := xml.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := d.RawToken()
+		if err != nil {
+			return used
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			used[start.Name.Space] = struct{}{}
+			for _, attr := range start.Attr {
+				used[attr.Name.Space] = struct{}{}
+			}
+		}
+	}
+}
+
+// open returns the start tag of an element that declares, of what s has in
+// force, what raw can use, and nothing when s is nil.  Declaring all of it for
+// every element would cost a reply declarations times elements.
+func (s *scope) open(raw []byte) string {
 	if s == nil {
 		return ""
 	}
 
-	var (
-		b strings.Builder
-		// the prefixes there is a declaration for already, "" for the
-		// default namespace: the nearest one counts
-		seen = make(map[string]struct{})
-	)
+	var b strings.Builder
 	b.WriteString("<scope")
-	for ; s != nil; s = s.parent {
-		// encoding/xml takes the last of two declarations on one element
-		for _, decl := range slices.Backward(s.decls) {
-			prefix := ""
-			if decl.Name.Space == xmlns {
-				prefix = decl.Name.Local
-			}
-			if _, ok := seen[prefix]; ok {
-				continue
-			}
-			seen[prefix] = struct{}{}
-
-			b.WriteString(" " + xmlns)
-			if prefix != "" {
-				b.WriteString(":" + prefix)
-			}
-			b.WriteString(`="`)
-			_ = xml.EscapeText(&b, []byte(decl.Value))
-			b.WriteString(`"`)
+	for prefix := range usedPrefixes(raw) {
+		value, ok := s.lookup(prefix)
+		if !ok {
+			continue
 		}
+		b.WriteString(" " + xmlns)
+		if prefix != "" {
+			b.WriteString(":" + prefix)
+		}
+		b.WriteString(`="`)
+		_ = xml.EscapeText(&b, []byte(value))
+		b.WriteString(`"`)
 	}
 	b.WriteString(">")
 	return b.String()
@@ -139,7 +174,7 @@ func decodeIn(ns *scope, raw []byte, v any) error {
 	var r io.Reader = bytes.NewReader(raw)
 
 	// the element inside one that declares what was declared around it
-	open := ns.open()
+	open := ns.open(raw)
 	if open != "" {
 		r = io.MultiReader(strings.NewReader(open), r)
 	}
@@ -253,6 +288,9 @@ func findElements(raw []byte, name string, first bool) ([]Element, error) {
 		if start.Name.Local != local || (space != "" && start.Name.Space != space) {
 			around = append(around, ns)
 			ns = ns.inside(start.Attr)
+			if ns != nil && ns.depth > maxScopes {
+				return nil, fmt.Errorf("failed to parse reply: %w", errTooManyScopes)
+			}
 			continue
 		}
 
