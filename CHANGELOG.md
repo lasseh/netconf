@@ -25,6 +25,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A commit or a confirmation whose reply holds an error next to `<ok/>` or
+  `<commit-success/>` gives `junos.ErrCommitUnknown`. It read as a refusal, which
+  says that nothing was committed.
+- `Change.Apply` no longer reports that the candidate may hold the change after
+  Junos revoked the session's access. Junos has dropped the load by then.
 - `rpc.GetConfigReply` fails on a reply that holds `<data>` and an error, as
   `rpc.GetConfig` does. A streamed read took it for a success.
 - `OpenConfiguration` and `CloseConfiguration` fail on a reply that cannot be

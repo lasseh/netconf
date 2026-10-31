@@ -767,6 +767,57 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			diff:      wantDiff,
 		},
 		{
+			// A reply that speaks for two routing engines, one of which took
+			// the commit.  It is no refusal: one engine runs the change.
+			name: "a reply says yes for one routing engine and no for the other",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepCommit: {body: `<commit-results><routing-engine><name>re1</name><commit-success/></routing-engine></commit-results>` + refused}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepCommit, stepRollback, stepUnlock},
+			says:      "operation-failed",
+			is:        []error{junos.ErrCommitUnknown},
+			isNot:     []error{junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
+			name: "a reply says ok next to an error",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepCommit: {body: `<ok/>` + refused}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepCommit, stepRollback, stepUnlock},
+			is:        []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
+			name:   "the confirmation says yes for one routing engine and no for the other",
+			change: confirmed,
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepConfirm: {body: `<commit-results><routing-engine><name>re1</name><commit-success/></routing-engine></commit-results>` + refused}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepConfirm, stepUnlock},
+			is:        []error{junos.ErrCommitUnknown},
+			isNot:     []error{junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
+			// Junos took the candidate back together with a commit that was
+			// not confirmed, and the lock with it, so there is nothing to put
+			// back and no reason to say that there may be.
+			name: "the commit comes after a confirmed commit went back",
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{
+					stepCommit:   {body: accessRevoked},
+					stepRollback: {body: accessRevoked},
+				}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepCommit, stepRollback, stepUnlock},
+			says:      "access has been revoked",
+			saysNot:   "may hold the change",
+			is:        []error{netconf.ErrOperationFailed},
+			isNot:     []error{junos.ErrCommitUnknown, junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
 			// Junos went back to the previous configuration before the
 			// confirmation arrived, and took the lock with it.  The unlock
 			// after it is answered with <ok/> all the same.

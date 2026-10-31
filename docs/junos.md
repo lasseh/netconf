@@ -285,6 +285,8 @@ dry run in a private copy.
   is missing, incomplete, or has neither `<ok/>` nor a refusal. Junos may
   have carried it out.
 - A commit that Junos refuses is a plain error, and nothing was committed.
+  A reply that holds an error next to `<ok/>` or `<commit-success/>` says both,
+  and is `junos.ErrCommitUnknown`.
   A reply with warnings and a `<load-error-count>` in place of `<ok/>` is
   a refusal too. Its error matches `netconf.ErrElementNotFound` and holds
   the warnings as `netconf.RPCErrors`.
