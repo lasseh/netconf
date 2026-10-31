@@ -303,22 +303,17 @@ func NewTransport(client *ssh.Client) (*Transport, error) {
 // command when there is one.  conn is what closing the transport closes, nil
 // when the connection is not the transport's.
 func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transport, error) {
-	sess, err := client.NewSession()
+	// Not client.NewSession: an ssh.Session stops reading the requests of its
+	// channel at an exit-status it cannot parse, and the requests behind that
+	// one stop the read loop of the whole connection, for good.
+	sess, requests, err := client.OpenChannel("session", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ssh session: %w", err)
 	}
+	go ssh.DiscardRequests(requests)
 
-	stdin, err := sess.StdinPipe()
-	if err != nil {
-		_ = sess.Close()
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	stdout, err := sess.StdoutPipe()
-	if err != nil {
-		_ = sess.Close()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
+	stdin := channelWriter{sess}
+	var stdout io.Reader = sess
 
 	// The request is sent as it is, and not with RequestSubsystem, for its
 	// answer: a device that says no is another matter than a request that
@@ -332,11 +327,7 @@ func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transpor
 		said  *tail.Buffer
 		heard = make(chan struct{})
 	)
-	stderr, err := sess.StderrPipe()
-	if err != nil {
-		_ = sess.Close()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
+	stderr := sess.Stderr()
 	if command != "" {
 		request, payload = "exec", ssh.Marshal(&struct{ Command string }{command})
 
@@ -433,6 +424,13 @@ func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transpor
 	t.framer = transport.NewFramer(inR, outW)
 	return t, nil
 }
+
+// channelWriter is the writing side of a channel: closing it says that nothing
+// more is coming, and leaves the reading side open.
+type channelWriter struct{ ssh.Channel }
+
+// Close implements io.Closer.
+func (w channelWriter) Close() error { return w.CloseWrite() }
 
 // Close will close the underlying transport.  If the connection was created
 // with Dial or DialHost then the underlying ssh.Client is closed as well,

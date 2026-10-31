@@ -15,6 +15,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A device can no longer stop the read loop of an SSH connection with
+  channel requests that `x/crypto/ssh` cannot read. `Transport.Close`,
+  contexts, the keepalive and the message timeout ended nothing after that.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.
