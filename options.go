@@ -118,7 +118,8 @@ func WithOperationTimeout(d time.Duration) SessionOption {
 //
 // The limit counts bytes, and reading a message costs several times its size
 // in memory, see "Bound concurrency and memory" in docs/production-use.md.  A
-// message nested too deep for that ends the session with ErrMessageShape.
+// message nested too deep for that, or of more than 1 MiB that holds fewer than
+// 16 bytes per element and attribute, ends the session with ErrMessageShape.
 func WithMaxMessageSize(n int64) SessionOption {
 	return maxMessageSizeOpt(n)
 }

@@ -8,7 +8,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `ErrMessageShape` ends a session on a message nested deeper than 10000
-  levels, ahead of any parser, and fails `Open` on such a hello.
+  levels, or of more than 1 MiB with fewer than 16 bytes per element and
+  attribute, ahead of any parser, and fails `Open` on such a hello.
 - `Reply.HasElement` says whether a reply holds an element, and keeps
   nothing of it.
 - `transporttest.RunStuck` holds a transport to close-is-cancel against a

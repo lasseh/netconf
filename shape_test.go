@@ -68,6 +68,36 @@ func TestCheckShape(t *testing.T) {
 	be.True(t, errors.Is(checkShape([]byte(nested(maxMessageDepth+1))), ErrMessageShape))
 }
 
+// A message of many small elements is refused, one with the density of a real
+// reply passes at any size the limit lets through.
+func TestCheckShapeDensity(t *testing.T) {
+	flat := strings.Repeat("<a/>", 1<<20) // 4 MiB
+
+	be.True(t, errors.Is(checkShape([]byte(flat)), ErrMessageShape))
+	be.True(t, errors.Is(checkShape([]byte("<a"+strings.Repeat(` b=""`, 1<<20)+"/>")), ErrMessageShape))
+
+	// under the size nothing is held to it
+	be.NilErr(t, checkShape([]byte(flat[:minDenseSize-4])))
+
+	// right at the threshold, and just past it
+	entry := "<aaaaaaaaaaaaa/>" // 16 bytes
+	be.Equal(t, minBytesPerItem, len(entry))
+	be.NilErr(t, checkShape([]byte(strings.Repeat(entry, 1<<17))))
+	be.True(t, errors.Is(checkShape([]byte(strings.Repeat("<aaaaaaaaaaaa/>", 1<<17))), ErrMessageShape))
+}
+
+// The densest real reply measured is a route table of Junos, at 24.4 bytes per
+// item.  Messages of that density pass at the default limit.
+func TestCheckShapeRealDensity(t *testing.T) {
+	entry := "<rt-entry>abc</rt-entry>" // 24 bytes, one item
+	be.Equal(t, 24, len(entry))
+	raw := bytes.Repeat([]byte(entry), DefaultMaxMessageSize/len(entry))
+
+	_, items := shapeOf(raw)
+	be.Equal(t, len(raw)/len(entry), items)
+	be.NilErr(t, checkShape(raw))
+}
+
 // tokenShape is shapeOf the long way, as a parser sees the message.  ended says
 // that the parser read it to its end.
 func tokenShape(raw []byte) (maxDepth, items int, ended bool) {
@@ -160,6 +190,30 @@ func TestMessageNestedTooDeep(t *testing.T) {
 			waitDone(t, sess)
 		})
 	}
+
+	t.Run("a flat reply of 1<<21 elements", func(t *testing.T) {
+		wire, dev := netconftest.NewWire(t)
+		go deepDevice(t, dev, strings.Repeat("<a/>", 1<<21))
+
+		sess, err := Open(context.Background(), wire, WithLogger(nil))
+		be.NilErr(t, err)
+
+		_, err = sess.ExecReply(testCtx(t), NewRPC("<get/>"))
+		be.True(t, errors.Is(err, ErrMessageShape))
+		waitDone(t, sess)
+	})
+
+	t.Run("one start tag full of attributes", func(t *testing.T) {
+		wire, dev := netconftest.NewWire(t)
+		go deepDevice(t, dev, "<a"+strings.Repeat(` b=""`, 1<<21)+"/>")
+
+		sess, err := Open(context.Background(), wire, WithLogger(nil))
+		be.NilErr(t, err)
+
+		_, err = sess.ExecReply(testCtx(t), NewRPC("<get/>"))
+		be.True(t, errors.Is(err, ErrMessageShape))
+		waitDone(t, sess)
+	})
 
 	t.Run("a reply one level less goes through", func(t *testing.T) {
 		wire, dev := netconftest.NewWire(t)

@@ -49,7 +49,7 @@ These causes end a session without `Close`:
 | A write fails partway through | `failed to write message`, wrapping the write error |
 | `ncssh.WithKeepalive` gives up on the device | `ncssh.ErrKeepalive` |
 | A message exceeds `WithMaxMessageSize` | `netconf.ErrMessageTooLarge` |
-| A message nests deeper than 10000 levels | `netconf.ErrMessageShape` |
+| A message nests deeper than 10000 levels, or is too dense to be a real one | `netconf.ErrMessageShape` |
 | A message stalls longer than `WithMessageTimeout` | `netconf.ErrMessageStalled` |
 | The notification queue is full | `netconf.ErrNotificationOverflow` |
 | [100 skipped messages](#untrusted-devices) in a row | `ignored 100 messages in a row`, with no sentinel |
@@ -339,8 +339,11 @@ session, not for the whole program.
   of a reply read with `Session.Stream`.
 - **Message shape.** The size limit counts bytes, and a parser spends per
   element. A buffered message nested deeper than 10000 levels ends the
-  session with `netconf.ErrMessageShape`, and a hello like that fails
-  `Open`. See
+  session with `netconf.ErrMessageShape`, and so does one of more than 1 MiB
+  with fewer than 16 bytes per element and attribute, which is denser than
+  any reply measured on Junos. A hello like that fails `Open`. The density
+  of other NETCONF servers was not measured: read a reply that trips this
+  with `Session.Stream`. See
   [Bound concurrency and memory](production-use.md#bound-concurrency-and-memory)
   for what reading a message costs.
 - **Notification queue.** A full queue ends the session with

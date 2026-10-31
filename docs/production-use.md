@@ -125,8 +125,10 @@ how many sessions and operations run at once. See
 The limit counts bytes, and reading a message costs more than that.
 `Session.ExecReply` allocates about 6 times the size of a reply, and
 `Reply.Elements` about 12 times, measured on Junos replies of up to 54 MiB.
-Size a process from that multiple and not from the limit, and lower
-`netconf.WithMaxMessageSize` to what your program really reads.
+A message built to cost as much as the shape check lets through peaks at about
+18 times its size in heap. Size a process from that multiple and not from the
+limit, and lower `netconf.WithMaxMessageSize` to what your program really
+reads. A program that reads more than that holds uses `Session.Stream`.
 
 Run one configuration workflow at a time per session, see
 [Change safety](junos.md#change-safety). Separate sessions still compete

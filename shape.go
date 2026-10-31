@@ -9,6 +9,17 @@ import (
 // refuses to unmarshal into a field, and which no parser here needs more of.
 const maxMessageDepth = 10000
 
+// minDenseSize is the size from which a message is held to minBytesPerItem.  A
+// smaller one costs little, and a short reply can be all markup.
+const minDenseSize = 1 << 20
+
+// minBytesPerItem is the fewest bytes per element and attribute a large message
+// may have.  Junos replies run from 24 to 62, measured on router, switch and Evolved
+// up to 54 MiB, and a parser spends per item whatever its size: a message of <a/>
+// has 4.  A count of items would not do, as what a real large reply holds grows with
+// its size.
+const minBytesPerItem = 16
+
 // ErrMessageShape ends a session whose peer sent a message that no parser should
 // walk, see WithMaxMessageSize.
 var ErrMessageShape = errors.New("message exceeds the maximum message shape")
@@ -16,7 +27,8 @@ var ErrMessageShape = errors.New("message exceeds the maximum message shape")
 // checkShape refuses a message before a parser sees it.  The limit on a message
 // counts its bytes, and a parser spends per element and per level of nesting.
 func checkShape(raw []byte) error {
-	if depth, _ := shapeOf(raw); depth > maxMessageDepth {
+	depth, items := shapeOf(raw)
+	if depth > maxMessageDepth || (len(raw) >= minDenseSize && items > len(raw)/minBytesPerItem) {
 		return ErrMessageShape
 	}
 	return nil
