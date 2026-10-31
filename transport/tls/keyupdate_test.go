@@ -43,6 +43,10 @@ const (
 	hello = `<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities>` +
 		`<capability>urn:ietf:params:netconf:base:1.0</capability></capabilities>` +
 		`<session-id>7</session-id></hello>]]>]]>`
+	junosHello = `<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities>` +
+		`<capability>urn:ietf:params:netconf:base:1.1</capability>` +
+		`<capability>http://xml.juniper.net/netconf/junos/1.0</capability></capabilities>` +
+		`<session-id>7</session-id></hello>]]>]]>`
 	replyStart = `<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">`
 )
 
@@ -353,6 +357,63 @@ func TestKeyUpdateStall_SessionCloseContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A session of a device that says it is Junos takes turns, and close-session waits
+// for its turn behind the operation that is being answered.
+func TestKeyUpdateStall_SessionCloseWaitingForItsTurn(t *testing.T) {
+	device, tr := connectFlooding(t)
+	device.say(t, junosHello)
+	session, err := netconf.Open(t.Context(), tr)
+	be.NilErr(t, err)
+
+	go func() { _, _ = session.ExecReply(t.Context(), "<get/>") }()
+	time.Sleep(200 * time.Millisecond) // the request is out, and in no Write
+
+	stop := make(chan struct{})
+	defer close(stop)
+	device.say(t, fmt.Sprintf("\n#%d\n%s", 1<<26, replyStart))
+	go device.flood(t, stop)
+	waitForTheStall(t, device)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	within(t, "Session.Close", func() { _ = session.Close(ctx) })
+	within(t, "Done", func() { <-session.Done() })
+}
+
+// A program that collects from two devices side by side, each under a deadline of
+// its own, and waits for both, gets to the end of its round.
+func TestKeyUpdateStall_TwoDevices(t *testing.T) {
+	hostile, stuck := connectFlooding(t)
+	healthy, fine := connectFlooding(t)
+	healthy.say(t, hello)
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go hostile.flood(t, stop)
+
+	collect := func(tr *Transport) error {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		session, err := netconf.Open(ctx, tr)
+		if err != nil {
+			return err
+		}
+		closeCtx, closeCancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer closeCancel()
+		_ = session.Close(closeCtx)
+		return nil
+	}
+
+	var hostileErr, healthyErr error
+	var round sync.WaitGroup
+	round.Go(func() { hostileErr = collect(stuck) })
+	round.Go(func() { healthyErr = collect(fine) })
+	within(t, "the round", round.Wait)
+
+	be.True(t, hostileErr != nil)
+	be.NilErr(t, healthyErr)
 }
 
 // The contract of a transport holds with the read path stuck in a write.

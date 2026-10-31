@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -1160,6 +1161,69 @@ func TestUnreadableReplyToOpenOrClose(t *testing.T) {
 			be.In(t, "the private copy was not closed", err.Error())
 		})
 	}
+}
+
+// The recipe for the ephemeral database in docs/junos.md, run as it is written
+// against a device that takes it.
+func TestEphemeralRecipe(t *testing.T) {
+	const set = "set policy-options prefix-list blocked 192.0.2.0/24"
+
+	recipe := func(ctx context.Context, session *netconf.Session) error {
+		openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		err := junos.OpenConfiguration{Ephemeral: true}.Exec(openCtx, session)
+		if err != nil {
+			return err // after the deadline, also close the session, see below
+		}
+		defer func() {
+			// drops what was not committed, and so does the end of the session
+			if err := (junos.CloseConfiguration{}).Exec(ctx, session); err != nil {
+				slog.Warn("the ephemeral database was not closed", "error", err)
+			}
+		}()
+
+		_, err = junos.LoadConfiguration{Format: junos.FormatSet, Config: set}.Exec(ctx, session)
+		if err != nil {
+			return err
+		}
+		_, err = junos.CommitConfiguration{}.Exec(ctx, session)
+		if err != nil {
+			return err
+		}
+		_, err = junos.GetConfiguration{Format: junos.FormatSet, Candidate: true}.Exec(ctx, session) // what is in it
+		return err
+	}
+
+	answers := func(open string) func(string) string {
+		return func(op string) string {
+			switch {
+			case strings.HasPrefix(op, "<open-configuration"):
+				return open
+			case strings.HasPrefix(op, "<load-configuration"):
+				return `<load-configuration-results><ok/></load-configuration-results>`
+			case strings.HasPrefix(op, "<commit-configuration"):
+				return `<ok/>`
+			case strings.HasPrefix(op, "<get-configuration"):
+				return `<configuration-set>` + set + `</configuration-set>`
+			}
+			return ``
+		}
+	}
+
+	t.Run("a device that takes it", func(t *testing.T) {
+		sess, ops := device(t, answers(``))
+		be.NilErr(t, recipe(context.Background(), sess))
+
+		sent := ops()
+		be.Equal(t, 5, len(sent))
+		be.True(t, strings.HasPrefix(sent[4], "<close-configuration"))
+	})
+
+	t.Run("an open that cannot be read loads nothing", func(t *testing.T) {
+		sess, ops := device(t, answers(`<<`))
+		be.Nonzero(t, recipe(context.Background(), sess))
+		be.Equal(t, 1, len(ops()))
+	})
 }
 
 // A whole change against a device that takes it: what goes out, in order.
