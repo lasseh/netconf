@@ -505,7 +505,12 @@ err := junos.OpenConfiguration{Ephemeral: true}.Exec(openCtx, session)
 if err != nil {
 	return err // after the deadline, also close the session, see below
 }
-defer junos.CloseConfiguration{}.Exec(ctx, session) // drops what was not committed
+defer func() {
+	// drops what was not committed, and so does the end of the session
+	if err := (junos.CloseConfiguration{}).Exec(ctx, session); err != nil {
+		slog.Warn("the ephemeral database was not closed", "error", err)
+	}
+}()
 
 _, err = junos.LoadConfiguration{
 	Format: junos.FormatSet,

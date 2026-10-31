@@ -721,9 +721,18 @@ func (op OpenConfiguration) MarshalXML(e *xml.Encoder, _ xml.StartElement) error
 
 // Exec opens the database.
 func (op OpenConfiguration) Exec(ctx context.Context, session *netconf.Session) error {
-	// Junos answers with an empty reply, there is no <ok/> to wait for
-	_, err := session.ExecReply(ctx, op)
-	return operr.Named("open-configuration", err)
+	return operr.Named("open-configuration", readToItsEnd(session.ExecReply(ctx, op)))
+}
+
+// readToItsEnd holds a reply with no <ok/> to wait for to being XML.  Junos answers
+// with an empty reply there, and one that stops being XML says nothing certain,
+// which is no yes.
+func readToItsEnd(reply *netconf.Reply, err error) error {
+	if err != nil {
+		return err
+	}
+	_, err = reply.HasElement("ok")
+	return err
 }
 
 // CloseConfiguration closes the database opened with OpenConfiguration and
@@ -739,6 +748,5 @@ func (CloseConfiguration) MarshalXML(e *xml.Encoder, _ xml.StartElement) error {
 
 // Exec closes the database.
 func (op CloseConfiguration) Exec(ctx context.Context, session *netconf.Session) error {
-	_, err := session.ExecReply(ctx, op)
-	return operr.Named("close-configuration", err)
+	return operr.Named("close-configuration", readToItsEnd(session.ExecReply(ctx, op)))
 }

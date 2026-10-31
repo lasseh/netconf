@@ -25,6 +25,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `OpenConfiguration` and `CloseConfiguration` fail on a reply that cannot be
+  read to its end, as a lock, a load and a commit do. Such a reply counted as a
+  success, and `Change{Private: true}` went on with no lock.
 - `.github/SECURITY.md` and `WithProxyJump` say what holds for a jump host: the
   device's password stays out of its reach only while the device's host key is
   checked.

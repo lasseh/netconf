@@ -1091,6 +1091,77 @@ uncommitted changes will be discarded on exit
 	})
 }
 
+// A reply to open-configuration or close-configuration that cannot be read to its
+// end says nothing certain, as it does for a lock, a load or a commit.  It is no
+// success: the change stops before it loads anything into a candidate it may
+// not have.
+func TestUnreadableReplyToOpenOrClose(t *testing.T) {
+	const change = "set system host-name router1"
+
+	for _, tc := range []struct{ name, body string }{
+		{"not XML", `<<`},
+		{"cut short", `<open-configuration-results>`},
+	} {
+		t.Run(tc.name+", open", func(t *testing.T) {
+			sess, _ := session(t, tc.body)
+			be.Nonzero(t, junos.OpenConfiguration{Private: true}.Exec(context.Background(), sess))
+		})
+
+		t.Run(tc.name+", open of the ephemeral database", func(t *testing.T) {
+			sess, _ := session(t, tc.body)
+			be.Nonzero(t, junos.OpenConfiguration{Ephemeral: true}.Exec(context.Background(), sess))
+		})
+
+		t.Run(tc.name+", close", func(t *testing.T) {
+			sess, _ := session(t, tc.body)
+			be.Nonzero(t, junos.CloseConfiguration{}.Exec(context.Background(), sess))
+		})
+
+		t.Run(tc.name+", a private change stops before the load", func(t *testing.T) {
+			sess, ops := device(t, func(op string) string {
+				if strings.HasPrefix(op, "<open-configuration") {
+					return tc.body
+				}
+				return ``
+			})
+
+			result, err := junos.Change{Format: junos.FormatSet, Config: change, Private: true}.Apply(context.Background(), sess)
+			be.Nonzero(t, err)
+			be.False(t, result.Committed)
+
+			sent := ops()
+			be.Equal(t, 2, len(sent))
+			be.True(t, strings.HasPrefix(sent[0], "<open-configuration"))
+			be.True(t, strings.HasPrefix(sent[1], "<close-configuration"))
+		})
+
+		t.Run(tc.name+", a close on the way out is reported", func(t *testing.T) {
+			sess, _ := device(t, func(op string) string {
+				switch {
+				case strings.HasPrefix(op, "<close-configuration"):
+					return tc.body
+				case strings.HasPrefix(op, "<load-configuration"):
+					return `<load-configuration-results><ok/></load-configuration-results>`
+				case strings.HasPrefix(op, "<get-configuration"):
+					return `<configuration-information><configuration-output>
+[edit system]
++  host-name router1;
+</configuration-output></configuration-information>`
+				}
+				return ``
+			})
+
+			no := errors.New("the reviewer says no")
+			_, err := junos.Change{
+				Format: junos.FormatSet, Config: change, Private: true,
+				Review: func(context.Context, string) error { return no },
+			}.Apply(context.Background(), sess)
+			be.True(t, errors.Is(err, no))
+			be.In(t, "the private copy was not closed", err.Error())
+		})
+	}
+}
+
 // A whole change against a device that takes it: what goes out, in order.
 func TestChangeWorkflow(t *testing.T) {
 	sess, ops := device(t, func(op string) string {
