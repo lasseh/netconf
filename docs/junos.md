@@ -546,8 +546,10 @@ Give `OpenConfiguration` a context with a deadline, and close the session
 when it runs out. Junos gives an instance to one session at a time, so
 `OpenConfiguration` waits while another session has it open. Junos may
 still open it after the deadline, and later loads and commits on the
-session would then go to the ephemeral database. No recorded device run
-covers this wait.
+session would then go to the ephemeral database. On vJunos-router and
+Junos OS Evolved 26.2 a session in that wait did not answer
+`<close-session>`, so `Session.Close` took all of the context it was given,
+and the instance was free for the next session once it had returned.
 
 `EphemeralInstance` opens a named instance instead. Named instances are
 [not verified on a device](junos-verified.md#not-verified-on-a-device).
