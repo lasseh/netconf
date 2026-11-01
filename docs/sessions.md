@@ -343,10 +343,10 @@ session, not for the whole program.
 - **Message shape.** The size limit counts bytes, and a parser spends per
   element. A buffered message nested deeper than 10000 levels ends the
   session with `netconf.ErrMessageShape`, and so does one of more than 1 MiB
-  with fewer than 16 bytes per element and attribute, which is denser than
-  any reply measured on Junos. A hello like that fails `Open`. The density
-  of other NETCONF servers was not measured: read a reply that trips this
-  with `Session.Stream`. See
+  with fewer than 8 bytes per element and attribute. The shortest element
+  that holds a value has 8, and the densest reply measured on Junos has 13.
+  A hello like that fails `Open`. The density of other NETCONF servers was
+  not measured: read a reply that trips this with `Session.Stream`. See
   [Bound concurrency and memory](production-use.md#bound-concurrency-and-memory)
   for what reading a message costs.
 - **Notification queue.** A full queue ends the session with

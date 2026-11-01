@@ -80,13 +80,34 @@ func TestCheckShapeDensity(t *testing.T) {
 	be.NilErr(t, checkShape([]byte(flat[:minDenseSize-4])))
 
 	// right at the threshold, and just past it
-	entry := "<aaaaaaaaaaaaa/>" // 16 bytes
+	entry := "<aaaaa/>" // 8 bytes
 	be.Equal(t, minBytesPerItem, len(entry))
-	be.NilErr(t, checkShape([]byte(strings.Repeat(entry, 1<<17))))
-	be.True(t, errors.Is(checkShape([]byte(strings.Repeat("<aaaaaaaaaaaa/>", 1<<17))), ErrMessageShape))
+	be.NilErr(t, checkShape([]byte(strings.Repeat(entry, 1<<18))))
+	be.True(t, errors.Is(checkShape([]byte(strings.Repeat("<aaaa/>", 1<<18))), ErrMessageShape))
 }
 
-// The densest real reply measured is a route table of Junos, at 24.4 bytes per
+// Without indentation a configuration gets far denser than any other reply: a
+// firewall filter in junos.FormatXMLMinified had 15 bytes per item with a match in
+// each term, and 13 without.  The shortest element that holds a value has 8.
+func TestCheckShapeDensestData(t *testing.T) {
+	for _, tc := range []struct {
+		entry string
+		items int
+	}{
+		{"<term><name>t12345</name><from><protocol>tcp</protocol></from><then><accept/></then></term>", 6},
+		{"<term><name>12345</name><then><accept/></then></term>", 4},
+		{"<a>1</a>", 1},
+	} {
+		count := 4 * minDenseSize / len(tc.entry)
+		raw := bytes.Repeat([]byte(tc.entry), count)
+
+		_, items := shapeOf(raw)
+		be.Equal(t, count*tc.items, items)
+		be.NilErr(t, checkShape(raw))
+	}
+}
+
+// The densest indented reply measured is a route table of Junos, at 24.4 bytes per
 // item.  Messages of that density pass at the default limit.
 func TestCheckShapeRealDensity(t *testing.T) {
 	entry := "<rt-entry>abc</rt-entry>" // 24 bytes, one item

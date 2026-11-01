@@ -62,7 +62,7 @@ release. Earlier releases are not patched.
   costs several times its size in memory, see
   [Bound concurrency and memory](../docs/production-use.md#bound-concurrency-and-memory).
   A message nested deeper than 10000 levels ends the session, and so does
-  one of more than 1 MiB with fewer than 16 bytes per element and attribute.
+  one of more than 1 MiB with fewer than 8 bytes per element and attribute.
 - **Malformed input from a device.** The framing, the receive path and
   reply parsing have fuzz targets. Their seeds run with the unit tests, and
   CI fuzzes each target for five minutes every night.
