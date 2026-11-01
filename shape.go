@@ -14,11 +14,11 @@ const maxMessageDepth = 10000
 const minDenseSize = 1 << 20
 
 // minBytesPerItem is the fewest bytes per element and attribute a large message
-// may have.  <a>1</a> is the shortest element that holds a value, so data stays
-// above it whoever sends it, and a parser spends per item whatever its size: a
-// message of <a/> has 4.  The densest Junos reply measured has 13, a firewall filter
-// in junos.FormatXMLMinified, and an indented one 24.  A count of items would not
-// do, as what a real large reply holds grows with its size.
+// may have.  <a>1</a> is the shortest element that holds a value, and a parser
+// spends per item whatever its size: a message of <a/> has 4.  The densest Junos
+// reply measured has 13, a firewall filter in junos.FormatXMLMinified, and an
+// indented one 24.  A count of items would not do, as what a real large reply holds
+// grows with its size.
 const minBytesPerItem = 8
 
 // ErrMessageShape ends a session whose peer sent a message that no parser should
