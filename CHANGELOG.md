@@ -22,6 +22,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reply, and with a `load-error-count` it matches `netconf.RPCErrors`.
 - `Session.Exec` takes a `*netconf.Reply` as its reply, and fills it in as
   it is.
+- On Unix, `nccmd.Start` runs the process in a session of its own, and
+  `Close` kills its process group. A `ProxyCommand` or the `ssh` of a jump
+  host that `ssh` started outlived it before, one more with its connection
+  for each failed `Open`. The process has no terminal now: `ssh` fails a
+  login that asks for a password, a passphrase or whether to trust a host
+  key, where it asked on the terminal of the program before. A program
+  that `SSH_ASKPASS` names, with `SSH_ASKPASS_REQUIRE=force`, can still
+  give it the password. Ctrl-C on that terminal no longer reaches `ssh`
+  either, and a program that ends without `Close` leaves `ssh` to end by
+  itself. A process group set in `cmd.SysProcAttr` is kept.
 
 ### Fixed
 

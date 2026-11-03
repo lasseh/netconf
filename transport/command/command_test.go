@@ -106,6 +106,18 @@ func helper(mode string) {
 	case "linger":
 		// the child of an orphan: it outlives the test that waits for it
 		time.Sleep(6 * time.Second)
+	case "parent":
+		// starts a child that holds nothing of the pipes, an ssh -W of a
+		// jump host, writes its pid to the file arg names and says nothing
+		child := exec.CommandContext(context.Background(), os.Args[0]) //nolint:gosec // the test binary itself
+		child.Env = append(os.Environ(), helperEnv+"=linger")
+		if err := child.Start(); err != nil {
+			os.Exit(1)
+		}
+		if err := os.WriteFile(arg, fmt.Appendf(nil, "%d\n", child.Process.Pid), 0o600); err != nil {
+			os.Exit(1)
+		}
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	}
 }
 
@@ -171,8 +183,8 @@ func TestClose(t *testing.T) {
 // good.
 func TestCloseCannotKill(t *testing.T) {
 	denied := errors.New("operation not permitted")
-	kill = func(*os.Process) error { return denied }
-	t.Cleanup(func() { kill = (*os.Process).Kill })
+	kill = func(*os.Process, bool) error { return denied }
+	t.Cleanup(func() { kill = end })
 
 	cmd := helperCommand(t, "stay")
 	tr, err := Start(cmd)

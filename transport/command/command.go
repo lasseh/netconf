@@ -9,10 +9,12 @@
 //	if err != nil { ... }
 //	session, err := netconf.Open(ctx, tr)
 //
-// The command gets pipes and no terminal.  An ssh that has to ask for a
-// password or a passphrase has nowhere to ask, so the login has to be one
+// The command gets pipes, and on Unix a session of its own with no terminal.
+// An ssh that has to ask for a password, a passphrase or whether to trust a
+// host key has nowhere to ask and fails the login, so the login has to be one
 // that needs no typing: a key without a passphrase, an agent, a certificate,
-// a connection that is shared already.
+// a connection that is shared already, a program that SSH_ASKPASS names with
+// SSH_ASKPASS_REQUIRE=force.
 //
 // The package is usually imported under another name:
 //
@@ -41,6 +43,8 @@ type framer = transport.Framer
 // Transport is NETCONF over the standard input and output of a process.
 type Transport struct {
 	cmd *exec.Cmd
+	// group says that the process leads a process group, which Close kills
+	group bool
 
 	// stdin and stdout are our ends of the pipes to the process
 	stdin  *os.File
@@ -77,8 +81,16 @@ const exitGrace = time.Second
 //
 // The transport owns the process.  Close kills it and waits for it, and so
 // the context given to netconf.Open, which closes the transport when it
-// ends, kills it too.  Only the process itself is killed: use a command that
-// is the program and not a shell around it.
+// ends, kills it too.  On Unix the process runs in a session of its own, and
+// Close kills its process group: what it started, a ProxyCommand or the ssh
+// of a jump host, goes with it.  Ctrl-C on the terminal of the program does
+// not reach the process then, and a program that ends without Close leaves
+// it to end by itself.  A process group that cmd.SysProcAttr sets is kept,
+// and Close kills it only when the process leads it.  With Setpgid and no
+// Foreground the process keeps the terminal in a background group, where an
+// ssh that asks for a password stops until the context of netconf.Open ends.
+// Elsewhere only the process itself is killed: use a command that is the
+// program and not a shell around it.
 //
 // When the process exits by itself, reads and writes fail with an error
 // that says so, with the exit status and what the process wrote to standard
@@ -127,6 +139,7 @@ func Start(cmd *exec.Cmd) (*Transport, error) {
 	if cmd.WaitDelay == 0 {
 		cmd.WaitDelay = exitGrace
 	}
+	t.group = ownGroup(cmd)
 
 	err = cmd.Start()
 	// the process has its ends of the pipes, or there is no process
@@ -174,7 +187,7 @@ func (o *output) Read(p []byte) (int, error) {
 }
 
 // kill is what ends the process, for the test of a process it cannot end.
-var kill = (*os.Process).Kill
+var kill = end
 
 // Close kills the process, waits for it and releases everything that waits
 // on the transport.  It is safe to call more than once.
@@ -187,7 +200,7 @@ func (t *Transport) Close() error {
 		t.closing.Store(true)
 		// The process may be gone already, which is fine.  Closing our ends
 		// of the pipes is what gets a read or a write off them.
-		err := kill(t.cmd.Process)
+		err := kill(t.cmd.Process, t.group)
 		_ = t.stdin.Close()
 		_ = t.stdout.Close()
 		if err == nil || errors.Is(err, os.ErrProcessDone) {

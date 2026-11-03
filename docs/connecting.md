@@ -241,14 +241,27 @@ The `--` keeps a host name from an inventory from being read as an option of
 
 Rules for `nccmd.Start`:
 
-- **No terminal.** `ssh` cannot ask for a password or a passphrase, so use
-  a login that needs no typing, such as the ssh-agent.
+- **No terminal.** On Unix `ssh` runs in a session of its own, with no
+  terminal. It cannot ask for a password, a passphrase or whether to trust a
+  new host key, and the login fails with what `ssh` says, such as
+  `Permission denied` or `Host key verification failed.` Use a login that
+  needs no typing, such as the ssh-agent. A program that has the password
+  can give it through a program that `SSH_ASKPASS` names, with
+  `SSH_ASKPASS_REQUIRE=force`, both in `cmd.Env`.
 - **`exec.Command`, not `exec.CommandContext`.** A command context kills
   `ssh`, and the session with it, when it ends. Bound connecting with the
   context of `netconf.Open` instead.
 - **The transport owns the process.** `Close`, or a context that ends
-  `netconf.Open`, kills the process and waits for it. Only that process is
-  killed, so start the program, not a shell around it.
+  `netconf.Open`, kills the process and waits for it. On Unix that kills its
+  process group, and what `ssh` started, a `ProxyCommand` or the `ssh` of a
+  jump host, goes with it. Elsewhere only that process is killed, so start
+  the program, not a shell around it.
+- **Ctrl-C does not reach `ssh`** on Unix. A program that ends without
+  `Close` leaves `ssh` to end by itself. While it connects to a far end that
+  says nothing, that takes until `-o ConnectTimeout` ends it, or for as long
+  as the far end holds the connection. Catch the signal, for example with
+  `signal.NotifyContext`, and let its context end `netconf.Open` or close
+  the session.
 - **Leave `Stdin`, `Stdout` and `Stderr` unset.** `nccmd.Start` refuses a
   set `Stdin` or `Stdout`. With `Stderr` set, the error of a command that
   exits lacks its standard error.
