@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // Kept is how much is kept, in bytes.
@@ -38,5 +39,16 @@ func (b *Buffer) String() string {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return strings.Join(strings.Fields(string(bytes.TrimSpace(b.buf))), " ")
+	return strings.Join(strings.Fields(Printable(string(bytes.TrimSpace(b.buf)))), " ")
+}
+
+// Printable returns s without the control characters a terminal acts on.  White
+// space stays, for the caller to fold.
+func Printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
 }

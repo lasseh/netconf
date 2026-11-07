@@ -91,7 +91,7 @@ SSH config, connection sharing, Kerberos or a hardware token that no agent
 offers, run `ssh` through `nccmd.Start`:
 
 ```go
-tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "router1.example.net", "netconf"))
+tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "--", "router1.example.net", "netconf"))
 if err != nil {
 	return err
 }

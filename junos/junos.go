@@ -125,6 +125,17 @@ const (
 	FormatJSONMinified Format = "json-minified"
 )
 
+// firstChild keeps the name of the first element it is given and drops the rest.
+type firstChild struct{ name string }
+
+// UnmarshalXML implements xml.Unmarshaler.
+func (f *firstChild) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	if f.name == "" {
+		f.name = start.Name.Local
+	}
+	return d.Skip()
+}
+
 // Text returns the output of a request made with format="text", as the CLI
 // prints it.  A multi-chassis device answers once per member; the outputs
 // are joined.
@@ -150,16 +161,14 @@ func Text(reply *netconf.Reply) (string, error) {
 	// A request that prints nothing has an empty reply.  Anything else in
 	// there is not text output and must not read as "no output".
 	var body struct {
-		Text     string `xml:",chardata"`
-		Children []struct {
-			XMLName xml.Name
-		} `xml:",any"`
+		Text  string     `xml:",chardata"`
+		Child firstChild `xml:",any"`
 	}
 	if err := reply.Decode(&body); err != nil {
 		return "", err
 	}
-	if len(body.Children) > 0 {
-		return "", fmt.Errorf("junos: reply has <%s> instead of <output>", body.Children[0].XMLName.Local)
+	if body.Child.name != "" {
+		return "", fmt.Errorf("junos: reply has <%s> instead of <output>", body.Child.name)
 	}
 
 	text := strings.TrimSpace(body.Text)
@@ -319,6 +328,9 @@ func jsonText(object map[string]any, name string) string {
 // touched.
 //
 // A reply without the element fails with netconf.ErrElementNotFound.
+//
+// Decode takes no context.  The reply is here by then, and reading one that holds
+// many elements takes as long as it takes.
 func Decode(reply *netconf.Reply, name string, v any) error {
 	target := reflect.ValueOf(v)
 	if target.Kind() != reflect.Pointer || target.IsNil() {

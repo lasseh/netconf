@@ -98,6 +98,11 @@ func (op GetCommitInformation) exec(ctx context.Context, session *netconf.Sessio
 
 	commits := make([]Commit, 0, len(found))
 	for _, el := range found {
+		// the reply is here, and reading it can take long: a device decides
+		// what is in it
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var entry struct {
 			Sequence int    `xml:"sequence-number"`
 			User     string `xml:"user"`

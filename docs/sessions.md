@@ -49,6 +49,7 @@ These causes end a session without `Close`:
 | A write fails partway through | `failed to write message`, wrapping the write error |
 | `ncssh.WithKeepalive` gives up on the device | `ncssh.ErrKeepalive` |
 | A message exceeds `WithMaxMessageSize` | `netconf.ErrMessageTooLarge` |
+| A message nests deeper than 10000 levels, or is too dense to be a real one | `netconf.ErrMessageShape` |
 | A message stalls longer than `WithMessageTimeout` | `netconf.ErrMessageStalled` |
 | The notification queue is full | `netconf.ErrNotificationOverflow` |
 | [100 skipped messages](#untrusted-devices) in a row | `ignored 100 messages in a row`, with no sentinel |
@@ -303,7 +304,10 @@ The handler's context is canceled at session end.
 Notifications that arrive while the handler is busy wait in a queue, by
 default up to 10,000 notifications or 64 MiB,
 `netconf.DefaultNotifQueueMessages` and `netconf.DefaultNotifQueueBytes`.
-An empty queue takes one notification above the byte budget. A
+The budget counts the bytes of a notification and what the attributes on its
+start tag take in memory, which is close to what the queue holds: up to 1.25
+times the budget was measured. An empty queue takes one notification above
+the byte budget. A
 notification that arrives at a full queue ends the session with
 `netconf.ErrNotificationOverflow`. `netconf.WithNotifQueue` changes the
 bounds. With `NotifQueue.Drop` set, the session drops what does not fit,
@@ -336,6 +340,15 @@ session, not for the whole program.
   ends the session with `netconf.ErrMessageTooLarge`,
   and a hello that large fails `Open`. Nothing limits the size or duration
   of a reply read with `Session.Stream`.
+- **Message shape.** The size limit counts bytes, and a parser spends per
+  element. A buffered message nested deeper than 10000 levels ends the
+  session with `netconf.ErrMessageShape`, and so does one of more than 1 MiB
+  with fewer than 8 bytes per element and attribute. The shortest element
+  that holds a value has 8, and the densest reply measured on Junos has 13.
+  A hello like that fails `Open`. The density of other NETCONF servers was
+  not measured: read a reply that trips this with `Session.Stream`. See
+  [Bound concurrency and memory](production-use.md#bound-concurrency-and-memory)
+  for what reading a message costs.
 - **Notification queue.** A full queue ends the session with
   `netconf.ErrNotificationOverflow`, unless `netconf.NotifQueue.Drop` is
   set. See [Notifications](#notifications).

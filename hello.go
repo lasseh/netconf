@@ -124,7 +124,11 @@ func readGreeting(raw []byte) (g greeting, err error) {
 				if err != nil && !errors.As(err, &rpcErrs) {
 					return g, err
 				}
+				// the cap of parseReply holds per reply, this one across them
 				g.errors = append(append(g.errors, reply.Warnings...), rpcErrs...)
+				if len(g.errors) > maxRPCErrors {
+					g.errors = g.errors[:maxRPCErrors]
+				}
 			default:
 				if err := d.Skip(); err != nil {
 					return g, located(raw, d.InputOffset(), err)

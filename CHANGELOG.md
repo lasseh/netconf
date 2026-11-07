@@ -5,6 +5,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- `ErrMessageShape` ends a session on a message nested deeper than 10000
+  levels, or of more than 1 MiB with fewer than 8 bytes per element and
+  attribute, ahead of any parser, and fails `Open` on such a hello.
+- `Reply.HasElement` says whether a reply holds an element, and keeps
+  nothing of it.
+- `transporttest.RunStuck` holds a transport to close-is-cancel against a
+  device that does more than go silent.
+
 ### Changed
 
 - The `rpc` operations and `rpc.ExecOK` read the `<ok/>` the way the
@@ -12,9 +22,73 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reply, and with a `load-error-count` it matches `netconf.RPCErrors`.
 - `Session.Exec` takes a `*netconf.Reply` as its reply, and fills it in as
   it is.
+- On Unix, `nccmd.Start` runs the process in a session of its own, and
+  `Close` kills its process group. A `ProxyCommand` or the `ssh` of a jump
+  host that `ssh` started outlived it before, one more with its connection
+  for each failed `Open`. The process has no terminal now: `ssh` fails a
+  login that asks for a password, a passphrase or whether to trust a host
+  key, where it asked on the terminal of the program before. A program
+  that `SSH_ASKPASS` names, with `SSH_ASKPASS_REQUIRE=force`, can still
+  give it the password. Ctrl-C on that terminal no longer reaches `ssh`
+  either, and a program that ends without `Close` leaves `ssh` to end by
+  itself. A process group set in `cmd.SysProcAttr` is kept.
 
 ### Fixed
 
+- Two log records carried device text past the 128 bytes of the others: a
+  skipped malformed message and the end of a session. `Session.Err` keeps the
+  whole text.
+- Device text in a log record, and what a device or `ssh` wrote to standard
+  error in an error, comes without control characters.
+- `junos.LoadConfiguration`, and with it `Change`, refuses an override or update
+  with nothing in it, and `rpc.EditConfig` an empty config with
+  `default-operation` replace, before anything is sent. Junos takes both and is
+  left with an empty candidate. `rpc.Config{Payload: ""}` says that it is meant.
+- A commit or a confirmation whose reply holds an error next to `<ok/>` or
+  `<commit-success/>` gives `junos.ErrCommitUnknown`. It read as a refusal, which
+  says that nothing was committed.
+- `Change.Apply` no longer reports that the candidate may hold the change after
+  Junos revoked the session's access. Junos has dropped the load by then.
+- `rpc.GetConfigReply` fails on a reply that holds `<data>` and an error, as
+  `rpc.GetConfig` does. A streamed read took it for a success.
+- `OpenConfiguration` and `CloseConfiguration` fail on a reply that cannot be
+  read to its end, as a lock, a load and a commit do. Such a reply counted as a
+  success, and `Change{Private: true}` went on with no lock.
+- `.github/SECURITY.md` and `WithProxyJump` say what holds for a jump host: the
+  device's password stays out of its reach only while the device's host key is
+  checked.
+- A device can no longer stop the read loop of an SSH connection with
+  channel requests that `x/crypto/ssh` cannot read. `Transport.Close`,
+  contexts, the keepalive and the message timeout ended nothing after that.
+- `Transport.Close`, `Session.Close`, `DialHost`, `Dial` and `Open` return
+  when a device gets a key exchange stuck, also during a login through a
+  jump host. Closing the connection wakes nothing then, so they hung for as
+  long as the process lived.
+- `Transport.Close` of `transport/tls` returns when a TLS 1.3 device stops
+  reading and asks for key updates. It waited on the device for good, and
+  with it the context of `Open`, the context of `Session.Close` and
+  `WithMessageTimeout`.
+- `Session.Close` returns, and `Done` closes, when `Close` of the transport
+  does not return. `Session.Close` waited for it for good.
+- A reply keeps 1024 RPC errors and 1024 warnings at most, a hello 1024 in
+  all, and a notification, the ack of an operation and `junos.Text` no longer
+  keep an element for each one in the message. A message of many small
+  elements cost dozens of times its size in heap there.
+- `NotifQueue.Bytes` counts the memory a notification keeps. It counted the
+  length of the body, and a device could hold many times the budget through
+  attributes on the start tag, or a body that a repair made shorter.
+- Decoding the elements of a reply takes time in proportion to the reply. It
+  took declarations times elements, with no way to stop it. More than 1024
+  nested elements that declare a namespace fail the read, and
+  `junos.GetCommitInformation` and `junos.GetDatabaseStatusInformation` stop
+  between elements when their context ends.
+- `nctls.Dial` puts the host in `ServerName` under `InsecureSkipVerify` too,
+  as `tls.Dial` does. A verifier that replaces the default check saw an empty
+  name and skipped the check of the host. SNI now goes out in that case.
+- The fallback to port 22 in the known hosts files runs only when they have
+  no entry for the NETCONF port. It also ran for a certificate that an entry
+  for the port did not accept, so a CA trusted for the name overrode a key
+  pinned for the port.
 - `transporttest.StreamPeer.Upgrade` waits until what `Send` has queued is
   written. A hello queued before it could go out chunked, and
   `netconf.Open` then timed out.

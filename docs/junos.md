@@ -224,7 +224,11 @@ patch, see
 `Apply` refuses a `Change` before it sends anything when `Config` is
 missing, `Comment` or `Confirm` is over its limit, or the format or action
 is unknown or does not fit, such as an `Action` for set commands,
-`junos.LoadReplace` for JSON, or a patch in a format other than text.
+`junos.LoadReplace` for JSON, or a patch in a format other than text. It also
+refuses a `junos.LoadOverride` or `junos.LoadUpdate` with nothing in `Config`:
+an empty string, white space or an empty `<configuration/>`, which would leave
+an empty candidate. An override that holds little is not refused, and commits:
+`Review` and `Confirm` are there for that.
 
 `Apply` and `junos.LoadConfiguration` write each JSON escape that has a
 literal form, such as the `\u0026` that `encoding/json` writes for `&`,
@@ -285,6 +289,8 @@ dry run in a private copy.
   is missing, incomplete, or has neither `<ok/>` nor a refusal. Junos may
   have carried it out.
 - A commit that Junos refuses is a plain error, and nothing was committed.
+  A reply that holds an error next to `<ok/>` or `<commit-success/>` says both,
+  and is `junos.ErrCommitUnknown`.
   A reply with warnings and a `<load-error-count>` in place of `<ok/>` is
   a refusal too. Its error matches `netconf.ErrElementNotFound` and holds
   the warnings as `netconf.RPCErrors`.
@@ -505,7 +511,12 @@ err := junos.OpenConfiguration{Ephemeral: true}.Exec(openCtx, session)
 if err != nil {
 	return err // after the deadline, also close the session, see below
 }
-defer junos.CloseConfiguration{}.Exec(ctx, session) // drops what was not committed
+defer func() {
+	// drops what was not committed, and so does the end of the session
+	if err := (junos.CloseConfiguration{}).Exec(ctx, session); err != nil {
+		slog.Warn("the ephemeral database was not closed", "error", err)
+	}
+}()
 
 _, err = junos.LoadConfiguration{
 	Format: junos.FormatSet,
@@ -535,8 +546,10 @@ Give `OpenConfiguration` a context with a deadline, and close the session
 when it runs out. Junos gives an instance to one session at a time, so
 `OpenConfiguration` waits while another session has it open. Junos may
 still open it after the deadline, and later loads and commits on the
-session would then go to the ephemeral database. No recorded device run
-covers this wait.
+session would then go to the ephemeral database. A session in that wait
+did not answer `<close-session>` on vJunos-router and Junos OS Evolved
+26.2, so `Session.Close` takes all of the context it is given: keep that
+context short.
 
 `EphemeralInstance` opens a named instance instead. Named instances are
 [not verified on a device](junos-verified.md#not-verified-on-a-device).

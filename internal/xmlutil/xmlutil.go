@@ -2,7 +2,13 @@
 // this module.
 package xmlutil
 
-import "encoding/xml"
+import (
+	"bytes"
+	"encoding/xml"
+	"errors"
+	"io"
+	"reflect"
+)
 
 // ValidNCName reports whether s is a valid XML NCName as far as this module
 // needs it: it starts with an ASCII letter or '_' and continues with ASCII
@@ -47,4 +53,51 @@ func EncodePayload(e *xml.Encoder, start xml.StartElement, v any) error {
 		return err
 	}
 	return e.EncodeToken(start.End())
+}
+
+// IsEmpty reports whether payload holds no configuration: a nil pointer, a string
+// or []byte with nothing but white space in it, or one element with nothing in
+// it.  A value of any other type is not looked into.
+func IsEmpty(payload any) bool {
+	var raw []byte
+	switch v := payload.(type) {
+	case nil:
+		return true
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	default:
+		value := reflect.ValueOf(payload)
+		return value.Kind() == reflect.Pointer && value.IsNil()
+	}
+
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return true
+	}
+
+	// what is not XML, such as text or set commands, has something in it
+	seen := false
+	d := xml.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			return seen
+		}
+		if err != nil {
+			return false
+		}
+		switch tok := tok.(type) {
+		case xml.StartElement:
+			if seen {
+				return false
+			}
+			seen = true
+		case xml.CharData:
+			if len(bytes.TrimSpace(tok)) > 0 {
+				return false
+			}
+		}
+	}
 }

@@ -73,7 +73,11 @@ When a session ends while your program still needs it:
 2. Stop using the old session. A session cannot be reopened, so dial and
    call `netconf.Open` again.
 3. Retry with exponential backoff and jitter under the worker context, so
-   shutdown ends the retries. Cap the attempts or the total time.
+   shutdown ends the retries. Cap the attempts or the total time, per device
+   over a time window, and do not reset the count when a session opens: a
+   device that ends every session it gets would keep the program reconnecting,
+   and an SSH connection that ends that way can leave memory behind, see
+   [Known limits](../.github/SECURITY.md#known-limits).
 4. Do not retry a failure that waiting does not fix: `ncssh.ErrAuth`, a
    `*knownhosts.KeyError` or `*knownhosts.RevokedError`,
    `ncssh.ErrSubsystemRefused`, or a `*netconf.HelloError` with RPC errors
@@ -121,6 +125,14 @@ by default, bounds one message, and `netconf.WithNotifQueue` bounds the
 queue of one session. Neither bounds the memory of the program, so limit
 how many sessions and operations run at once. See
 [Untrusted devices](sessions.md#untrusted-devices).
+
+The limit counts bytes, and reading a message costs more than that.
+`Session.ExecReply` allocates about 6 times the size of a reply, and
+`Reply.Elements` about 12 times, measured on Junos replies of up to 54 MiB.
+A message built to cost as much as the shape check lets through peaks at about
+42 times its size in heap. Size a process from that multiple and not from the
+limit, and lower `netconf.WithMaxMessageSize` to what your program really
+reads. A program that reads more than that holds uses `Session.Stream`.
 
 Run one configuration workflow at a time per session, see
 [Change safety](junos.md#change-safety). Separate sessions still compete

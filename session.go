@@ -43,6 +43,10 @@ const DefaultHelloTimeout = 30 * time.Second
 // forever.
 const DefaultCloseTimeout = 30 * time.Second
 
+// closeGrace is how long Session.Close waits for the transport behind its own
+// context.  It is a variable for the tests.
+var closeGrace = 2 * time.Second
+
 // DefaultMaxMessageSize is the default limit on the size of a message
 // received from the server.
 const DefaultMaxMessageSize = 256 << 20
@@ -119,8 +123,10 @@ type Session struct {
 	err error
 
 	// done is closed when the receive loop has exited, i.e. the session is
-	// over, whether through Close or a dead transport.
-	done chan struct{}
+	// over, whether through Close or a dead transport.  finish closes it, also
+	// for a transport that never lets the receive loop exit, see endTransport.
+	done   chan struct{}
+	finish func()
 
 	closeOnce   sync.Once
 	trCloseOnce sync.Once
@@ -162,6 +168,7 @@ func newSession(tr transport.Transport, opts ...SessionOption) *Session {
 		done:     make(chan struct{}),
 		trClosed: make(chan struct{}),
 	}
+	s.finish = sync.OnceFunc(func() { close(s.done) })
 	if cfg.notifHandler != nil {
 		s.notif = newNotifier(cfg.notifHandler, cfg.notifQueue, cfg.logger)
 		s.notif.trace = cfg.trace.Notification
@@ -278,6 +285,10 @@ func (s *Session) exchangeHello() error {
 	r.untimed()
 
 	raw, readErr := io.ReadAll(r)
+	// the hello does not pass through boundedReader.whole
+	if err := checkShape(raw); err != nil {
+		return &HelloError{Err: err}
+	}
 	said, err := readGreeting(raw)
 	switch {
 	case writeErr != nil:
@@ -409,6 +420,39 @@ func (s *Session) closedErr() error {
 		return fmt.Errorf("%w: %w", ErrClosed, err)
 	}
 	return ErrClosed
+}
+
+// endTransport closes the transport and waits for the receive loop to end, which
+// a closed transport makes it do (close-is-cancel), so no goroutine outlives a
+// completed Close.
+//
+// A transport that breaks that contract must not hold the caller.  The context
+// has often run out by now, a silent device being why the session is closing, so
+// a transport gets closeGrace behind it.  After that the session is over without
+// it.
+func (s *Session) endTransport(ctx context.Context) error {
+	released := make(chan error, 1)
+	go func() {
+		err := s.closeTransport()
+		<-s.done
+		released <- err
+	}()
+
+	select {
+	case err := <-released:
+		return err
+	case <-ctx.Done():
+	}
+
+	timer := time.NewTimer(closeGrace)
+	defer timer.Stop()
+	select {
+	case err := <-released:
+		return err
+	case <-timer.C:
+		s.finish()
+		return errors.New("netconf: the transport did not close")
+	}
 }
 
 func (s *Session) closeTransport() error {
@@ -594,7 +638,8 @@ func (s *Session) nextMessageID() string {
 // close the session.
 //
 // Nobody looks inside a streamed reply.  A device that answers with an
-// rpc-error sends it in place of the data, for the reader to find, and text
+// rpc-error sends it in place of the data or next to it, for the reader to find
+// or for a type that looks, such as rpc.GetConfigReply, and text
 // that is not ASCII is the way a Junos device writes it, see "Text from
 // Junos" in the package documentation.
 func (s *Session) Stream(ctx context.Context, op any) (*Message, error) {
@@ -777,7 +822,8 @@ func (s *Session) Exec(ctx context.Context, op, reply any) error {
 //
 // The session is over when Close returns, whatever it returns.  An error
 // says the close was not a clean one: the device refused close-session or
-// did not acknowledge it before the context fired.  Close is safe to call
+// did not acknowledge it before the context fired, or the transport did not
+// close, which Close gives a moment behind the context.  Close is safe to call
 // more than once and on a session that has already ended; only the first
 // call can return an error.
 //
@@ -818,16 +864,12 @@ func (s *Session) Close(ctx context.Context) error {
 		}
 
 		// Close the connection and ignore errors if the remote side hung up first.
-		if err := s.closeTransport(); err != nil &&
+		if err := s.endTransport(ctx); err != nil &&
 			!errors.Is(err, net.ErrClosed) &&
 			!errors.Is(err, io.EOF) &&
 			!errors.Is(err, syscall.EPIPE) {
 			closeErr = errors.Join(closeErr, err)
 		}
-
-		// A closed transport ends the receive loop (close-is-cancel); wait
-		// for it so no goroutine outlives a completed Close.
-		<-s.done
 	})
 
 	return closeErr

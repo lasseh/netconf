@@ -76,6 +76,43 @@ func TestGetConfigReply_DecodeUncheckedReply(t *testing.T) {
 		be.True(t, errors.Is(msg.Decode(&reply), netconf.ErrElementNotFound))
 	})
 
+	// An error next to the data fails the read, as it does through Exec.  Config
+	// holds what came.
+	const warning = `<rpc-error><error-type>protocol</error-type><error-tag>operation-failed</error-tag>` +
+		`<error-severity>warning</error-severity><error-message>a warning</error-message></rpc-error>`
+	const junosError = `<xnm:error xmlns:xnm="http://xml.juniper.net/xnm/1.1/xnm"><message>syntax error</message></xnm:error>`
+	for _, tc := range []struct {
+		name, body, config string
+	}{
+		{"data and then an error", `<data><x/></data>` + rpcError, `<x/>`},
+		{"an error and then data", rpcError + `<data><x/></data>`, `<x/>`},
+		{"empty data and then an error", `<data/>` + rpcError, ``},
+		{"the error element of Junos next to data", `<data><x/></data>` + junosError, `<x/>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, err := mockSession(t, tc.body).Stream(t.Context(), netconf.NewRPC(GetConfig{Source: Running}))
+			be.NilErr(t, err)
+
+			var reply GetConfigReply
+			err = msg.Decode(&reply)
+
+			var rpcErrs netconf.RPCErrors
+			be.True(t, errors.As(err, &rpcErrs))
+			be.Equal(t, 1, len(rpcErrs))
+			be.Equal(t, "syntax error", rpcErrs[0].Message)
+			be.Equal(t, tc.config, string(reply.Config))
+		})
+	}
+
+	t.Run("a warning and then data", func(t *testing.T) {
+		msg, err := mockSession(t, warning+`<data><x/></data>`).Stream(t.Context(), netconf.NewRPC(GetConfig{Source: Running}))
+		be.NilErr(t, err)
+
+		var reply GetConfigReply
+		be.NilErr(t, msg.Decode(&reply))
+		be.Equal(t, `<x/>`, string(reply.Config))
+	})
+
 	t.Run("data", func(t *testing.T) {
 		msg, err := mockSession(t, `<data><x/></data>`).Stream(t.Context(), netconf.NewRPC(GetConfig{Source: Running}))
 		be.NilErr(t, err)
@@ -91,6 +128,26 @@ func TestPartialLock_ExecWithoutLockID(t *testing.T) {
 	_, err := PartialLock{Select: []string{"/x"}}.Exec(t.Context(), mockSession(t, `<ok/>`))
 	be.True(t, errors.Is(err, netconf.ErrElementNotFound))
 	be.In(t, "<lock-id>", err.Error())
+}
+
+// With default-operation replace an empty config empties the target.  Junos
+// answers that with <ok/>, so it has to be meant.
+func TestEditConfig_EmptyReplace(t *testing.T) {
+	var noBytes []byte
+	for _, config := range []any{"", " \n", noBytes, "<configuration/>"} {
+		_, err := xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: ReplaceConfig, Config: config})
+		be.Nonzero(t, err)
+		be.In(t, "would empty the target", err.Error())
+
+		// with any other operation it changes nothing
+		_, err = xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: MergeConfig, Config: config})
+		be.NilErr(t, err)
+	}
+
+	// the way to mean it
+	out, err := xml.Marshal(EditConfig{Target: Candidate, DefaultOperation: ReplaceConfig, Config: Config{Payload: ""}})
+	be.NilErr(t, err)
+	be.In(t, "<config></config>", string(out))
 }
 
 // Config is the inline source of copy-config and validate.  Given to

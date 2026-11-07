@@ -137,9 +137,12 @@ var (
 
 	// ErrCommitUnknown says that a commit was sent and its outcome is not
 	// known: the context ended before the answer came, or the session did,
-	// or the answer says neither yes nor no, or cannot be read to its end.
-	// The change may be in effect or not, and after a confirmed commit it
-	// may be confirmed or not.  The device knows.
+	// or the answer says neither yes nor no, or both: an error next to a
+	// success, as a reply for two routing engines can.  An answer that cannot
+	// be read to its end is unknown too, unless a refusal stands in front of
+	// where it stops, which is a plain error.  The change may be in effect or
+	// not, and after a confirmed commit it may be confirmed or not.  The
+	// device knows.
 	ErrCommitUnknown = errors.New("outcome of the commit unknown")
 )
 
@@ -266,7 +269,7 @@ func (c Change) Apply(ctx context.Context, session *netconf.Session) (result Cha
 	reply, err = commit.Exec(ctx, session)
 	note(reply)
 	if err != nil {
-		return result, step("commit", inDoubt(err))
+		return result, step("commit", inDoubt(reply, err))
 	}
 	dirty = false
 
@@ -430,9 +433,13 @@ func (c Change) release(ctx context.Context, session *netconf.Session, dirty boo
 	// whoever comes after, so the candidate is put back first all the same,
 	// for the releases nobody has looked at.  Nobody else has changes in
 	// it: Junos does not lock a candidate that has any.
+	//
+	// A session whose access was revoked has nothing to put back: Junos went
+	// back from a confirmed commit, on 26.2 and 23.4 also under a lock taken
+	// after that commit, and dropped the load together with the lock.
 	var left error
 	if dirty {
-		if _, err := Rollback(0).Exec(ctx, session); !gone(err) {
+		if _, err := Rollback(0).Exec(ctx, session); !gone(err) && !revoked(err) {
 			left = step("the candidate was not put back and may hold the change", err)
 		}
 	}
@@ -468,10 +475,10 @@ func (c Change) confirm(ctx context.Context, session *netconf.Session, sent time
 	switch {
 	case err == nil:
 		return reply, nil
-	case refused(err):
+	case refused(err) && !mixed(reply):
 		return reply, fmt.Errorf("junos: confirm commit: %w: %w", ErrNotConfirmed, operr.Bare(err))
 	default:
-		return reply, step("confirm commit", inDoubt(err))
+		return reply, step("confirm commit", inDoubt(reply, err))
 	}
 }
 
@@ -498,10 +505,42 @@ func modified(err error) error {
 	return err
 }
 
-// inDoubt marks the error of a commit whose outcome is not known.
-func inDoubt(err error) error {
-	if refused(err) {
+// inDoubt marks the error of a commit whose outcome is not known.  reply is what
+// came with the error, nil for no reply.
+func inDoubt(reply *netconf.Reply, err error) error {
+	if refused(err) && !mixed(reply) {
 		return err
 	}
 	return fmt.Errorf("%w: %w", ErrCommitUnknown, operr.Bare(err))
+}
+
+// mixed reports whether reply, which holds an error, says that something went
+// through as well.  A reply can speak for two routing engines, and one of them
+// running the change is no refusal.  A reply that stops being XML reads as no: the
+// errors in front of where it stops are the refusal of the device.
+func mixed(reply *netconf.Reply) bool {
+	if reply == nil {
+		return false
+	}
+	for _, name := range []string{"commit-success", "ok"} {
+		if found, _ := reply.HasElement(name); found {
+			return true
+		}
+	}
+	return false
+}
+
+// revoked reports whether err is Junos saying that the access of the session to the
+// candidate went away under it.
+func revoked(err error) bool {
+	var rpcErrors netconf.RPCErrors
+	if !errors.As(err, &rpcErrors) {
+		return false
+	}
+	for i := range rpcErrors {
+		if strings.Contains(rpcErrors[i].Message, "access has been revoked") {
+			return true
+		}
+	}
+	return false
 }

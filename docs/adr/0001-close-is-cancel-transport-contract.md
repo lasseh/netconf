@@ -28,3 +28,19 @@ The decision holds. The TLS transport and the command transport pass the
 same conformance suite. Dead-device handling is `ncssh.WithKeepalive`, and
 `netconf.WithMessageTimeout` ends a session the same way when a message
 stalls, by closing the transport.
+
+## Update, 2026-10-31
+
+The decision holds, and closing what is under a transport turned out not
+to be enough. A device can stop the read loop of `x/crypto/ssh` or get a
+key exchange stuck, and then nothing reads the socket that closing it
+could wake. It can also make `crypto/tls` hold its write lock through a
+socket write from inside a read. So a transport has to release its IO
+whatever the library under it is doing: the SSH transport works through
+pipes it can cut, and the TLS transport closes the socket under a timer.
+
+The suite pinned the invariant for a device that goes silent only. For a
+device that does more, `transporttest.RunStuck` takes what the adapter
+needs to get stuck, and `Close` has to return and release a read. The
+session also no longer rests on `Close` returning: `Session.Close` gives a
+transport a moment behind its context, and ends the session without it.

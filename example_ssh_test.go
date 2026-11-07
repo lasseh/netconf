@@ -274,7 +274,7 @@ func Example_command() {
 
 	// not exec.CommandContext with ctx: that would kill ssh when ctx ends,
 	// with the session still in use
-	tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "router1.example.net", "netconf")) //nolint:noctx // see above
+	tr, err := nccmd.Start(exec.Command("ssh", "-s", "-p", "830", "--", "router1.example.net", "netconf")) //nolint:noctx // see above
 	if err != nil {
 		log.Print(err)
 		return

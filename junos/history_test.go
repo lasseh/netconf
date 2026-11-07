@@ -3,6 +3,7 @@ package junos_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -293,5 +294,45 @@ func TestFindCommit(t *testing.T) {
 		commit, found := junos.FindCommit(commits, "change-7")
 		be.True(t, found)
 		be.Equal(t, 1, commit.Sequence)
+	})
+}
+
+// endsLater is a context whose Err turns once the device has been asked.  Nothing
+// is waiting on it by then, so the only place to see it is between elements.
+type endsLater struct {
+	context.Context
+	ended atomic.Bool
+}
+
+func (c *endsLater) Err() error {
+	if c.ended.Load() {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+// A reply can hold more than a program wants to wait for: the two list operations
+// look at their context between its elements.
+func TestListOperationsStopWithTheirContext(t *testing.T) {
+	ctx := &endsLater{Context: context.Background()}
+	answer := func(body string) func(string) string {
+		return func(string) string {
+			ctx.ended.Store(true)
+			return body
+		}
+	}
+
+	t.Run("the commit history", func(t *testing.T) {
+		ctx.ended.Store(false)
+		sess, _ := device(t, answer(`<commit-information><commit-history><sequence-number>0</sequence-number></commit-history></commit-information>`))
+		_, err := junos.GetCommitInformation{}.Exec(ctx, sess)
+		be.True(t, errors.Is(err, context.Canceled))
+	})
+
+	t.Run("who is editing", func(t *testing.T) {
+		ctx.ended.Store(false)
+		sess, _ := device(t, answer(`<database-status-information><database-status><pid>1</pid></database-status></database-status-information>`))
+		_, err := junos.GetDatabaseStatusInformation{}.Exec(ctx, sess)
+		be.True(t, errors.Is(err, context.Canceled))
 	})
 }

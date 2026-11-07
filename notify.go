@@ -2,8 +2,10 @@ package netconf
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"log/slog"
+	"reflect"
 	"sync"
 )
 
@@ -39,7 +41,11 @@ type NotifQueue struct {
 	// DefaultNotifQueueMessages.
 	Messages int
 
-	// Bytes is how much they may take up together.  Zero means
+	// Bytes is how much they may take up together, counted as the bytes of a
+	// notification and what the attributes on its start tag take in memory.
+	// That is close to what the queue holds and not exact: up to 1.25 times
+	// was measured, as memory is handed out in size classes, and more in
+	// proportion for a small budget of tiny notifications.  Zero means
 	// DefaultNotifQueueBytes.  A single notification is let in whatever its
 	// size, which WithMaxMessageSize bounds.
 	Bytes int64
@@ -104,10 +110,26 @@ func newNotifier(handler NotifHandler, limit NotifQueue, logger *slog.Logger) *n
 	}
 }
 
+// attrSize is what an attribute of a start tag takes up as a value.  Its names and
+// its value are copies of their text in the body.
+var attrSize = int64(reflect.TypeFor[xml.Attr]().Size())
+
+// queueCost is what msg keeps while it waits.  The slice of attributes costs what
+// it has room for: encoding/xml grows it by appending, so it can hold nearly twice
+// what is in it.
+func queueCost(msg *Message) int64 {
+	cost := int64(len(msg.body)) + attrSize*int64(cap(msg.Attributes))
+	for _, attr := range msg.Attributes {
+		cost += int64(len(attr.Name.Space) + len(attr.Name.Local) + len(attr.Value))
+	}
+	return cost
+}
+
 // deliver queues msg for the handler without waiting for it.  It fails when
 // the queue is full and the session is to end over that.
 func (n *notifier) deliver(msg *Message) error {
-	size := int64(len(msg.body))
+	size := int64(len(msg.body)) // what a trace is told
+	cost := queueCost(msg)
 
 	n.mu.Lock()
 	if n.stopped {
@@ -116,7 +138,7 @@ func (n *notifier) deliver(msg *Message) error {
 		return nil
 	}
 	waiting := len(n.queue) - n.head
-	if waiting >= n.limit.Messages || (waiting > 0 && n.bytes+size > n.limit.Bytes) {
+	if waiting >= n.limit.Messages || (waiting > 0 && n.bytes+cost > n.limit.Bytes) {
 		if !n.limit.Drop {
 			n.mu.Unlock()
 			n.report(size, true)
@@ -134,7 +156,7 @@ func (n *notifier) deliver(msg *Message) error {
 		return nil
 	}
 	n.queue = append(n.queue, msg)
-	n.bytes += size
+	n.bytes += cost
 	n.mu.Unlock()
 	n.report(size, false)
 
@@ -156,7 +178,7 @@ func (n *notifier) next() *Message {
 	msg := n.queue[n.head]
 	n.queue[n.head] = nil
 	n.head++
-	n.bytes -= int64(len(msg.body))
+	n.bytes -= queueCost(msg)
 
 	// Move what waits to the front once it is no more than what was taken
 	// from in front of it.  The queue then takes the room of what waits,

@@ -7,6 +7,14 @@ import (
 	"github.com/carlmjohnson/be"
 )
 
+// What a device wrote to its standard error ends up in an error, and on the
+// terminal of whoever reads that.
+func TestBufferDropsControlCharacters(t *testing.T) {
+	var kept Buffer
+	_, _ = kept.Write([]byte("\x1b[31mfailed\x1b[0m: \u009bno\n"))
+	be.Equal(t, "[31mfailed[0m: no", kept.String())
+}
+
 // The end of what was said is what is kept of it, on one line.
 func TestBuffer(t *testing.T) {
 	var kept Buffer

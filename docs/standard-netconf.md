@@ -201,6 +201,12 @@ default:
 }
 ```
 
+A refusal can also be less than it looks. A device set to synchronize its
+commits answers for two routing engines, and a reply that holds an error next
+to `<ok/>` then reads as a refusal here, with one engine running the change.
+`junos.Change` reports that as `junos.ErrCommitUnknown`. `rpc.Commit` has no way
+to, so read the device after a refusal on such a device.
+
 After an unknown outcome, do not discard, edit or commit again. Close the
 session. From a new one under a fresh context, read the running
 configuration and any commit records the device keeps. Standard NETCONF

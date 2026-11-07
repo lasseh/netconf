@@ -112,10 +112,14 @@ func WithOperationTimeout(d time.Duration) SessionOption {
 
 // WithMaxMessageSize limits the size in bytes of a message the session
 // buffers: the server hello, replies and notifications.  A larger message
-// ends the session with ErrMessageTooLarge, so a misbehaving peer cannot
-// exhaust memory.  The default is DefaultMaxMessageSize; zero or less removes
-// the limit.  Replies requested with Stream are not buffered and not
-// limited.
+// ends the session with ErrMessageTooLarge.  The default is
+// DefaultMaxMessageSize; zero or less removes the limit.  Replies requested
+// with Stream are not buffered and not limited.
+//
+// The limit counts bytes, and reading a message costs several times its size
+// in memory, see "Bound concurrency and memory" in docs/production-use.md.  A
+// message nested too deep for that, or of more than 1 MiB that holds fewer than
+// 8 bytes per element and attribute, ends the session with ErrMessageShape.
 func WithMaxMessageSize(n int64) SessionOption {
 	return maxMessageSizeOpt(n)
 }
