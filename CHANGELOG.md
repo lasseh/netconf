@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## v0.1.1 - 2026-11-07
+
 ### Added
 
 - `ErrMessageShape` ends a session on a message nested deeper than 10000
