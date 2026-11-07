@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,12 +21,13 @@ type notTrustedError struct{ fingerprint string }
 func (e *notTrustedError) Error() string { return "not trusted: " + e.fingerprint }
 
 // recorder is a callback that keeps what it was asked, and answers with
-// err.
+// err once it has accepted the first accepts keys.
 type recorder struct {
-	mu    sync.Mutex
-	hosts []string
-	keys  []ssh.PublicKey
-	err   error
+	mu      sync.Mutex
+	hosts   []string
+	keys    []ssh.PublicKey
+	accepts int
+	err     error
 }
 
 func (r *recorder) check(hostname string, _ net.Addr, key ssh.PublicKey) error {
@@ -33,6 +35,9 @@ func (r *recorder) check(hostname string, _ net.Addr, key ssh.PublicKey) error {
 	defer r.mu.Unlock()
 	r.hosts = append(r.hosts, hostname)
 	r.keys = append(r.keys, key)
+	if len(r.keys) <= r.accepts {
+		return nil
+	}
 	return r.err
 }
 
@@ -82,6 +87,46 @@ func TestDialHost_HostKeyCallback(t *testing.T) {
 		be.True(t, errors.As(err, &refused))
 		be.Equal(t, "SHA256:test", refused.fingerprint)
 		be.False(t, errors.Is(err, ErrAuth))
+	})
+
+	// The callback is asked again at a rekey, and its error there ends the
+	// session: what reading from the transport fails with wraps it.
+	t.Run("the callback refuses at a rekey", func(t *testing.T) {
+		noHome(t)
+		srv := newTestServer(t)
+		srv.Serve(greet)
+		host, port := hostPort(t, srv.Addr())
+		rec := recorder{accepts: 1, err: &notTrustedError{fingerprint: "SHA256:rekey"}}
+
+		tr, err := DialHost(t.Context(), host, WithPort(port), WithUser("admin"), WithPassword(""),
+			WithHostKeyCallback(rec.check),
+			WithClientConfig(func(c *ssh.ClientConfig) { c.RekeyThreshold = rekeyThreshold }))
+		be.NilErr(t, err)
+		defer func() { _ = tr.Close() }()
+		readGreeting(t, tr)
+
+		// what goes past the threshold has the client start a key exchange
+		within(t, "the write", func() {
+			if w, err := tr.MsgWriter(); err == nil {
+				_, _ = w.Write(make([]byte, 4*rekeyThreshold))
+				_ = w.Close()
+			}
+		})
+		var readErr error
+		within(t, "the read", func() {
+			r, err := tr.MsgReader()
+			if err == nil {
+				_, err = io.ReadAll(r)
+			}
+			readErr = err
+		})
+
+		var refused *notTrustedError
+		be.True(t, errors.As(readErr, &refused))
+		be.Equal(t, "SHA256:rekey", refused.fingerprint)
+		be.Equal(t, 2, len(rec.keys))
+		be.Equal(t, rec.hosts[0], rec.hosts[1])
+		be.Equal(t, string(rec.keys[0].Marshal()), string(rec.keys[1].Marshal()))
 	})
 
 	// a known_hosts file that says otherwise has no say

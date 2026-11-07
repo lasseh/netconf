@@ -282,8 +282,9 @@ func WithHostKey(keys ...ssh.PublicKey) DialOption {
 //
 // fn is called again at every later key exchange of the session, a rekey
 // that x/crypto/ssh starts after about a gigabyte of traffic, and an error
-// there ends the session.  So fn must not depend on the context of the
-// dial, which may be over by then.
+// there ends the session: what reading from and writing to the transport
+// fail with then wraps it, and so does the error the session ends with.  So
+// fn must not depend on the context of the dial, which may be over by then.
 //
 // fn is called with the host and port the dial names the device by, as
 // "host:port", and the remote address of the connection.  The device

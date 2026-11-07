@@ -114,8 +114,9 @@ The callback is the only check of the device. No `known_hosts` file is
 read for it, and an error it returns fails the dial before the login,
 wrapped so that `errors.As` finds it. It runs again at every later key
 exchange of the session, a rekey after about a gigabyte of traffic, and an
-error there ends the session: so it must not depend on the context of the
-dial, which may be over by then. Given with `WithHostKey` or
+error there ends the session, with an error in `Session.Err` that wraps
+it. So it must not depend on the context of the dial, which may be over by
+then. Given with `WithHostKey` or
 `WithInsecureIgnoreHostKey`, or given nil, it fails the dial before it
 connects. `WithKnownHosts` next to it is for the jump hosts only. The
 device presents the key type it prefers

@@ -55,6 +55,10 @@ type Transport struct {
 	// gaveUp is why the keepalive closed the transport, if it did
 	gaveUp atomic.Pointer[error]
 
+	// refused is why a host key check on the way ended the connection at a
+	// rekey, if one did
+	refused *atomic.Pointer[error]
+
 	*framer
 }
 
@@ -135,8 +139,9 @@ func (o *loginOffer) String() string {
 }
 
 // login logs in to the hop over conn.  A login that the host refused fails
-// with ErrAuth.
-func (h hop) login(conn net.Conn) (sshConn ssh.Conn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, err error) {
+// with ErrAuth.  A host key that the check refuses at a later rekey is kept
+// in refused.
+func (h hop) login(conn net.Conn, refused *atomic.Pointer[error]) (sshConn ssh.Conn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, err error) {
 	// The ssh client checks the host key and then logs in, and what it
 	// fails with does not say how far it got.  So the check says when it
 	// has passed: what fails after that is the login.
@@ -145,6 +150,12 @@ func (h hop) login(conn net.Conn) (sshConn ssh.Conn, chans <-chan ssh.NewChannel
 	if check := config.HostKeyCallback; check != nil {
 		config.HostKeyCallback = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			err := check(hostname, remote, key)
+			if err != nil && hostKeyAccepted.Load() {
+				// A rekey, which x/crypto ends the connection over without
+				// saying why.
+				why := h.failed(fmt.Errorf("ssh: the host key of %s was refused at a rekey: %w", h.addr, err))
+				refused.CompareAndSwap(nil, &why)
+			}
 			hostKeyAccepted.Store(err == nil)
 			return err
 		}
@@ -275,6 +286,7 @@ func dial(ctx context.Context, network string, hops []hop, connect dialFunc, com
 // connectHops logs in to each hop over the one before it, starting on first,
 // and starts NETCONF on the last.  step is told what it is busy with.
 func connectHops(ctx context.Context, first net.Conn, hops []hop, command string, step func(string)) (*Transport, error) {
+	refused := new(atomic.Pointer[error])
 	var clients []*ssh.Client
 	for i, h := range hops {
 		conn := first
@@ -287,7 +299,7 @@ func connectHops(ctx context.Context, first net.Conn, hops []hop, command string
 		}
 
 		step("ssh handshake with " + h.String())
-		sshConn, chans, reqs, err := h.login(conn)
+		sshConn, chans, reqs, err := h.login(conn, refused)
 		if err != nil {
 			return nil, h.failed(err)
 		}
@@ -300,7 +312,7 @@ func connectHops(ctx context.Context, first net.Conn, hops []hop, command string
 	} else {
 		step("starting the netconf subsystem on " + last.addr)
 	}
-	return newTransport(clients[len(clients)-1], clients[0], command)
+	return newTransport(clients[len(clients)-1], clients[0], command, refused)
 }
 
 // String names the hop in an error: a jump host by the name it was given,
@@ -331,13 +343,14 @@ func (h hop) failed(err error) error {
 // be torn down together with the connection, so a goroutine stays behind
 // until the client is closed.
 func NewTransport(client *ssh.Client) (*Transport, error) {
-	return newTransport(client, nil, "")
+	return newTransport(client, nil, "", new(atomic.Pointer[error]))
 }
 
 // newTransport starts NETCONF on client: with the netconf subsystem, or with
 // command when there is one.  conn is what closing the transport closes, nil
-// when the connection is not the transport's.
-func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transport, error) {
+// when the connection is not the transport's.  refused is where the logins
+// keep a host key refused at a rekey.
+func newTransport(client *ssh.Client, conn io.Closer, command string, refused *atomic.Pointer[error]) (*Transport, error) {
 	// Not client.NewSession: an ssh.Session stops reading the requests of its
 	// channel at an exit-status it cannot parse, and the requests behind that
 	// one stop the read loop of the whole connection, for good.
@@ -419,9 +432,10 @@ func newTransport(client *ssh.Client, conn io.Closer, command string) (*Transpor
 	}
 
 	t := &Transport{
-		c:      client,
-		conn:   conn,
-		closed: make(chan struct{}),
+		c:       client,
+		conn:    conn,
+		closed:  make(chan struct{}),
+		refused: refused,
 	}
 
 	// Closing the connection is not how a transport gets out of IO stuck on a
@@ -507,8 +521,8 @@ func (t *Transport) close() error {
 var ErrKeepalive = errors.New("ssh keepalive gave up on the device")
 
 // MsgReader returns a reader for the next message, like the one of the
-// Framer.  Once the keepalive has closed the transport, what the reader
-// fails with says so.
+// Framer.  Once the keepalive has closed the transport, or a host key check
+// has refused a key at a rekey, what the reader fails with says so.
 func (t *Transport) MsgReader() (io.ReadCloser, error) {
 	r, err := t.framer.MsgReader()
 	if err != nil {
@@ -518,8 +532,8 @@ func (t *Transport) MsgReader() (io.ReadCloser, error) {
 }
 
 // MsgWriter returns a writer for a new message, like the one of the Framer.
-// Once the keepalive has closed the transport, what the writer fails with
-// says so.
+// Once the keepalive has closed the transport, or a host key check has
+// refused a key at a rekey, what the writer fails with says so.
 func (t *Transport) MsgWriter() (io.WriteCloser, error) {
 	w, err := t.framer.MsgWriter()
 	if err != nil {
@@ -529,10 +543,14 @@ func (t *Transport) MsgWriter() (io.WriteCloser, error) {
 }
 
 // because returns why IO on the transport failed with err: the keepalive, if
-// it closed the transport, and err as it is otherwise.
+// it closed the transport, a host key refused at a rekey, which ended the
+// connection, and err as it is otherwise.
 func (t *Transport) because(err error) error {
 	if gaveUp := t.gaveUp.Load(); gaveUp != nil {
 		return *gaveUp
+	}
+	if refused := t.refused.Load(); refused != nil {
+		return *refused
 	}
 	return err
 }

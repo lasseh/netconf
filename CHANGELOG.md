@@ -13,6 +13,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in `~/.ssh/known_hosts` or a `UserKnownHostsFile` of the SSH config could
   not be reached with a callback.
 
+### Fixed
+
+- A host key that the check refuses at a rekey ends the session with an
+  error that wraps the error of the check, so `errors.As` finds the one of
+  a `WithHostKeyCallback`. The session ended with an error that did not say
+  why.
+
 ## v0.1.1 - 2026-11-07
 
 ### Added
