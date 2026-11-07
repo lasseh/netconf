@@ -35,6 +35,7 @@ change its defaults:
 | `WithProxyJump(hosts...)` | Jump hosts, each `[user@]host[:port]` as for `ssh -J`. |
 | `WithKnownHosts(files...)` | Host key files for the device and every jump host. |
 | `WithHostKey(keys...)` | Hold the device to one of these host keys. |
+| `WithHostKeyCallback(fn)` | Check the device's host key with `fn`, in place of the known hosts. |
 | `WithInsecureIgnoreHostKey()` | Skip the host key check of the device. |
 | `WithKeepalive(interval, maxMissed)` | Send an SSH keepalive every `interval`. After `maxMissed` misses in a row, the session ends with `ncssh.ErrKeepalive`. Off by default. |
 | `WithCommand(command)` | Start NETCONF with a command, not the `netconf` subsystem. |
@@ -91,6 +92,35 @@ to the list. An RSA key also matches with rsa-sha2 signatures.
 `WithHostKey` covers the device only and wins over
 `ncssh.WithInsecureIgnoreHostKey`. Given no key, it fails the dial before
 it connects.
+
+A program that keeps the keys itself and learns a device's key the first
+time it connects (trust on first use) passes its own check with
+`ncssh.WithHostKeyCallback`:
+
+```go
+tr, err := ncssh.DialHost(ctx, "switch1.example.net",
+	ncssh.WithUser("automation"),
+	ncssh.WithHostKeyCallback(func(hostport string, _ net.Addr, key ssh.PublicKey) error {
+		// record the key when there is none on file, else compare; with a
+		// context of its own, not the one of the dial
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return pins.Check(checkCtx, hostport, key)
+	}),
+)
+```
+
+The callback is the only check of the device. No `known_hosts` file is
+read for it, and an error it returns fails the dial before the login,
+wrapped so that `errors.As` finds it. It runs again at every later key
+exchange of the session, a rekey after about a gigabyte of traffic, and an
+error there ends the session: so it must not depend on the context of the
+dial, which may be over by then. Given with `WithHostKey`,
+`WithKnownHosts` or `WithInsecureIgnoreHostKey`, or given nil, it fails
+the dial before it connects. The device presents the key type it prefers
+among those the client asks for; set `HostKeyAlgorithms` with
+`WithClientConfig` to narrow them. A jump host is checked against the
+known hosts as ever, and the callback never sees its key.
 
 ## Authentication
 
@@ -205,8 +235,9 @@ keys are the `IdentityFile` entries of its block, else the default identity
 files, with the ssh-agent when `SSH_AUTH_SOCK` is set.
 
 The host key of a jump host is always checked against the known hosts,
-even with `WithInsecureIgnoreHostKey` or `WithHostKey`, so a new jump host
-is refused where `ssh` would add its key. Log in to it once with `ssh` from
+even with `WithInsecureIgnoreHostKey`, `WithHostKey` or
+`WithHostKeyCallback`, so a new jump host is refused where `ssh` would
+add its key. Log in to it once with `ssh` from
 the account that runs the program, or pass a file with its key to
 `WithKnownHosts`. That replaces the default for the device too, so list
 the device's file as well.

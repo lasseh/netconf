@@ -14,6 +14,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing of it.
 - `transporttest.RunStuck` holds a transport to close-is-cancel against a
   device that does more than go silent.
+- `ncssh.WithHostKeyCallback` checks the device's host key with a callback
+  of the program, in place of the known hosts: for a program that keeps the
+  keys itself and learns one on first contact. No `known_hosts` file is
+  read for the device. Given with `WithHostKey`, `WithKnownHosts` or
+  `WithInsecureIgnoreHostKey`, or given nil, it fails the dial before it
+  connects. A jump host is still checked against the known hosts. The
+  callback runs again at every rekey of the session.
 
 ### Changed
 
