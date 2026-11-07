@@ -19,6 +19,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error that wraps the error of the check, so `errors.As` finds the one of
   a `WithHostKeyCallback`. The session ended with an error that did not say
   why.
+- `WithHostKeyCallback` and `docs/connecting.md` say what the callback
+  gets: the address the dial connects to, a `net.Addr` that is `0.0.0.0:0`
+  through a jump host, and a key of the first type on the client's list
+  that the device has. They said that the device chooses the type, and that
+  a rekey comes after about a gigabyte of traffic. With AES it comes after
+  64 GiB, and the device can ask for one at any time.
 
 ## v0.1.1 - 2026-11-07
 
