@@ -101,15 +101,21 @@ time it connects (trust on first use) passes its own check with
 tr, err := ncssh.DialHost(ctx, "switch1.example.net",
 	ncssh.WithUser("automation"),
 	ncssh.WithHostKeyCallback(func(hostport string, _ net.Addr, key ssh.PublicKey) error {
-		// record the key when there is none on file, else compare
-		return pins.Check(ctx, hostport, key)
+		// record the key when there is none on file, else compare; with a
+		// context of its own, not the one of the dial
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return pins.Check(checkCtx, hostport, key)
 	}),
 )
 ```
 
 The callback is the only check of the device. No `known_hosts` file is
 read for it, and an error it returns fails the dial before the login,
-wrapped so that `errors.As` finds it. Given with `WithHostKey`,
+wrapped so that `errors.As` finds it. It runs again at every later key
+exchange of the session, a rekey after about a gigabyte of traffic, and an
+error there ends the session: so it must not depend on the context of the
+dial, which may be over by then. Given with `WithHostKey`,
 `WithKnownHosts` or `WithInsecureIgnoreHostKey`, or given nil, it fails
 the dial before it connects. The device presents the key type it prefers
 among those the client asks for; set `HostKeyAlgorithms` with
@@ -230,8 +236,8 @@ files, with the ssh-agent when `SSH_AUTH_SOCK` is set.
 
 The host key of a jump host is always checked against the known hosts,
 even with `WithInsecureIgnoreHostKey`, `WithHostKey` or
-`WithHostKeyCallback`, so a new jump host
-is refused where `ssh` would add its key. Log in to it once with `ssh` from
+`WithHostKeyCallback`, so a new jump host is refused where `ssh` would
+add its key. Log in to it once with `ssh` from
 the account that runs the program, or pass a file with its key to
 `WithKnownHosts`. That replaces the default for the device too, so list
 the device's file as well.

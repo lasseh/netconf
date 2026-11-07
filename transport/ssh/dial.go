@@ -207,7 +207,8 @@ func WithSSHConfig(path string) DialOption {
 // What the other options say is about the device, as ssh has it for its
 // command line: WithUser, WithPort, WithPassword, WithPrivateKeyFile, WithSigner,
 // WithInsecureIgnoreHostKey, WithHostKey, WithHostKeyCallback and
-// WithClientConfig do not apply to a jump host.  A jump host is logged in to as the current user on port 22 with
+// WithClientConfig do not apply to a jump host.  A jump host is logged in
+// to as the current user on port 22 with
 // the keys of the ssh-agent and ~/.ssh/id_ed25519, id_ecdsa and id_rsa,
 // unless the jump host as written or its block in the ssh config (see
 // WithSSHConfig: HostName, User, Port, IdentityFile, UserKnownHostsFile)
@@ -280,6 +281,11 @@ func WithHostKey(keys ...ssh.PublicKey) DialOption {
 // presents, records it or compares it with the one on record, and returns
 // nil to accept it.  An error of fn fails the dial before the login, and the
 // dial's error wraps it, so errors.As finds it again.
+//
+// fn is called again at every later key exchange of the session, a rekey
+// that x/crypto/ssh starts after about a gigabyte of traffic, and an error
+// there ends the session.  So fn must not depend on the context of the
+// dial, which may be over by then.
 //
 // fn is called with the host and port the dial names the device by, as
 // "host:port", and the remote address of the connection.  The device

@@ -10,6 +10,7 @@ import (
 
 	"github.com/carlmjohnson/be"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // notTrustedError is what a callback of a test refuses a key with.
@@ -157,20 +158,24 @@ func TestDialHost_HostKeyCallback(t *testing.T) {
 		device.Serve(greet)
 		host, port := hostPort(t, device.Addr())
 
-		// a jump host nobody knows is refused, though the callback takes
-		// every key it is shown
+		// the known hosts have one jump host in them, and not the device
+		jumpAddr, _ := newJump(t, home)
+
+		// a jump host nobody knows is refused over its key, though the
+		// callback takes every key it is shown
 		unknown := newTestServer(t)
 		serveJump(unknown)
 		var rec recorder
 		_, err := DialHost(t.Context(), host, WithPort(port), WithUser("admin"), WithPassword(""),
 			WithHostKeyCallback(rec.check), WithProxyJump(unknown.Addr()))
-		be.Nonzero(t, err)
+		var keyErr *knownhosts.KeyError
+		be.True(t, errors.As(err, &keyErr))
+		be.Equal(t, 0, len(keyErr.Want))
 		be.In(t, "jump host", err.Error())
 		be.Equal(t, 0, len(rec.keys))
 
 		// the one that is known lets the dial through, and the callback is
 		// asked about the device alone
-		jumpAddr, _ := newJump(t, home)
 		tr, err := DialHost(t.Context(), host, WithPort(port), WithUser("admin"), WithPassword(""),
 			WithHostKeyCallback(rec.check), WithProxyJump(jumpAddr))
 		be.NilErr(t, err)

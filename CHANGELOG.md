@@ -19,7 +19,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   keys itself and learns one on first contact. No `known_hosts` file is
   read for the device. Given with `WithHostKey`, `WithKnownHosts` or
   `WithInsecureIgnoreHostKey`, or given nil, it fails the dial before it
-  connects. A jump host is still checked against the known hosts.
+  connects. A jump host is still checked against the known hosts. The
+  callback runs again at every rekey of the session.
 
 ### Changed
 
