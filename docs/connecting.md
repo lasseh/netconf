@@ -115,9 +115,10 @@ read for it, and an error it returns fails the dial before the login,
 wrapped so that `errors.As` finds it. It runs again at every later key
 exchange of the session, a rekey after about a gigabyte of traffic, and an
 error there ends the session: so it must not depend on the context of the
-dial, which may be over by then. Given with `WithHostKey`,
-`WithKnownHosts` or `WithInsecureIgnoreHostKey`, or given nil, it fails
-the dial before it connects. The device presents the key type it prefers
+dial, which may be over by then. Given with `WithHostKey` or
+`WithInsecureIgnoreHostKey`, or given nil, it fails the dial before it
+connects. `WithKnownHosts` next to it is for the jump hosts only. The
+device presents the key type it prefers
 among those the client asks for; set `HostKeyAlgorithms` with
 `WithClientConfig` to narrow them. A jump host is checked against the
 known hosts as ever, and the callback never sees its key.
@@ -240,7 +241,8 @@ even with `WithInsecureIgnoreHostKey`, `WithHostKey` or
 add its key. Log in to it once with `ssh` from
 the account that runs the program, or pass a file with its key to
 `WithKnownHosts`. That replaces the default for the device too, so list
-the device's file as well.
+the device's file as well, unless `WithHostKey` or `WithHostKeyCallback`
+checks the device.
 
 Closing the session closes the jump host connections. A keepalive probes
 the device through them, so it notices a dead jump host too.

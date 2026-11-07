@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- `ncssh.WithKnownHosts` can be given with `WithHostKeyCallback`, and then
+  names the known hosts of the jump hosts only, as it does next to
+  `WithHostKey`. The dial failed over the two, so a jump host that was not
+  in `~/.ssh/known_hosts` or a `UserKnownHostsFile` of the SSH config could
+  not be reached with a callback.
+
 ## v0.1.1 - 2026-11-07
 
 ### Added

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -115,7 +116,6 @@ func TestDialHost_HostKeyCallback(t *testing.T) {
 	// would leave one of them without a say.
 	t.Run("together with another host key check", func(t *testing.T) {
 		var rec recorder
-		known := filepath.Join(t.TempDir(), "known_hosts")
 
 		for name, tc := range map[string]struct {
 			opts []DialOption
@@ -124,8 +124,6 @@ func TestDialHost_HostKeyCallback(t *testing.T) {
 			"WithHostKey after":             {[]DialOption{WithHostKeyCallback(rec.check), WithHostKey(newKey(t))}, "WithHostKey"},
 			"WithHostKey before":            {[]DialOption{WithHostKey(newKey(t)), WithHostKeyCallback(rec.check)}, "WithHostKey"},
 			"WithHostKey with no key":       {[]DialOption{WithHostKeyCallback(rec.check), WithHostKey()}, "WithHostKey"},
-			"WithKnownHosts":                {[]DialOption{WithKnownHosts(known), WithHostKeyCallback(rec.check)}, "WithKnownHosts"},
-			"WithKnownHosts with no file":   {[]DialOption{WithHostKeyCallback(rec.check), WithKnownHosts()}, "WithKnownHosts"},
 			"WithInsecureIgnoreHostKey":     {[]DialOption{WithInsecureIgnoreHostKey(), WithHostKeyCallback(rec.check)}, "WithInsecureIgnoreHostKey"},
 			"WithInsecureIgnoreHostKey too": {[]DialOption{WithHostKeyCallback(rec.check), WithInsecureIgnoreHostKey()}, "WithInsecureIgnoreHostKey"},
 		} {
@@ -178,6 +176,34 @@ func TestDialHost_HostKeyCallback(t *testing.T) {
 		// asked about the device alone
 		tr, err := DialHost(t.Context(), host, WithPort(port), WithUser("admin"), WithPassword(""),
 			WithHostKeyCallback(rec.check), WithProxyJump(jumpAddr))
+		be.NilErr(t, err)
+		readGreeting(t, tr)
+		be.NilErr(t, tr.Close())
+		be.Equal(t, 1, len(rec.keys))
+		be.Equal(t, string(device.hostKey.Marshal()), string(rec.keys[0].Marshal()))
+	})
+
+	// WithKnownHosts names the known hosts of the jump hosts, and the device
+	// is not checked against them.
+	t.Run("WithKnownHosts is for the jump hosts", func(t *testing.T) {
+		sshHome(t)
+
+		device := newTestServer(t)
+		device.Serve(greet)
+		host, port := hostPort(t, device.Addr())
+
+		// the file has the jump host, which ~/.ssh/known_hosts does not, and
+		// another key for the device
+		jump := newTestServer(t)
+		serveJump(jump)
+		known := filepath.Join(t.TempDir(), "known_hosts")
+		be.NilErr(t, os.WriteFile(known, []byte(
+			knownhosts.Line([]string{knownhosts.Normalize(jump.Addr())}, jump.hostKey)+"\n"+
+				knownhosts.Line([]string{knownhosts.Normalize(device.Addr())}, newKey(t))+"\n"), 0o600))
+
+		var rec recorder
+		tr, err := DialHost(t.Context(), host, WithPort(port), WithUser("admin"), WithPassword(""),
+			WithHostKeyCallback(rec.check), WithKnownHosts(known), WithProxyJump(jump.Addr()))
 		be.NilErr(t, err)
 		readGreeting(t, tr)
 		be.NilErr(t, tr.Close())
