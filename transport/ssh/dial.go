@@ -87,12 +87,10 @@ type dialConfig struct {
 	sshConfig    *string
 	proxyJump    *string
 	// knownHosts are the files the caller asked for, sshKnownHosts the ones
-	// the ssh config names for the host, and knownHostsGiven says that
-	// WithKnownHosts was given, with files or without
-	knownHosts      []string
-	sshKnownHosts   []string
-	knownHostsGiven bool
-	insecure        bool
+	// the ssh config names for the host
+	knownHosts    []string
+	sshKnownHosts []string
+	insecure      bool
 	// hostKeys are the keys the device has to present one of, and pinned
 	// says that WithHostKey was given, with keys or without
 	hostKeys []ssh.PublicKey
@@ -215,7 +213,9 @@ func WithSSHConfig(path string) DialOption {
 // says otherwise.  Its login never uses the password.  The device leg keeps the
 // password from it only while the device's host key is checked: with
 // WithInsecureIgnoreHostKey or a permissive callback from WithClientConfig, it
-// can end that leg itself and read the password.  Its host key always has to be
+// can end that leg itself and read the password.  So it can at the first dial
+// of a device whose key a callback of WithHostKeyCallback learns then: the key
+// it learns may be the jump host's own.  Its host key always has to be
 // among the known hosts, see WithKnownHosts: a jump host that is new is refused,
 // also where the ssh config has ssh accept it (StrictHostKeyChecking no or
 // accept-new).
@@ -233,11 +233,11 @@ func WithProxyJump(hosts ...string) DialOption {
 // ~/.ssh/known_hosts.  The system-wide /etc/ssh/ssh_known_hosts is not read
 // unless it is given here.  A host only known by its entry for the regular
 // SSH port is accepted on other ports too, as the OpenSSH client does.
+//
+// With WithHostKey or WithHostKeyCallback the device is not checked against
+// the files, and they are for the jump hosts only, see WithProxyJump.
 func WithKnownHosts(files ...string) DialOption {
-	return dialOptionFunc(func(cfg *dialConfig) {
-		cfg.knownHosts = files
-		cfg.knownHostsGiven = true
-	})
+	return dialOptionFunc(func(cfg *dialConfig) { cfg.knownHosts = files })
 }
 
 // WithInsecureIgnoreHostKey disables host key verification, leaving the
@@ -282,22 +282,32 @@ func WithHostKey(keys ...ssh.PublicKey) DialOption {
 // nil to accept it.  An error of fn fails the dial before the login, and the
 // dial's error wraps it, so errors.As finds it again.
 //
-// fn is called again at every later key exchange of the session, a rekey
-// that x/crypto/ssh starts after about a gigabyte of traffic, and an error
-// there ends the session.  So fn must not depend on the context of the
-// dial, which may be over by then.
+// fn is called again at every later key exchange of the session: a rekey
+// that x/crypto/ssh starts, after 64 GiB of traffic with an AES cipher and
+// 1 GiB with any other unless RekeyThreshold says otherwise, or one that the
+// device asks for at any time.  An error there ends the session: what
+// reading from and writing to the transport fail with then wraps it, and so
+// does the error the session ends with.  So fn must not depend on the
+// context of the dial, which may be over by then.
 //
-// fn is called with the host and port the dial names the device by, as
-// "host:port", and the remote address of the connection.  The device
-// presents the key of its own choice among the types the ssh client asks
-// for; WithClientConfig can narrow those with HostKeyAlgorithms.
+// fn is called with the address the dial connects to, as "host:port": the
+// HostName of the ssh config (see WithSSHConfig), or else the host given to
+// DialHost.  The net.Addr it gets is no help: through a jump host it is
+// 0.0.0.0:0, and with WithDialer whatever that connection says.
+//
+// The key fn is shown is of the first type on the list of the ssh client
+// that the device has a key of.  The list is the default of x/crypto/ssh,
+// certificates first and Ed25519 after ECDSA and RSA, and it can change
+// with the version of x/crypto/ssh.  A program that records keys should set
+// HostKeyAlgorithms through WithClientConfig to the types it records.
 //
 // The callback is the one check of the device: given together with
-// WithHostKey, WithKnownHosts or WithInsecureIgnoreHostKey, in any order, the
-// dial fails before it connects, as it does for a nil fn.  No known_hosts
-// file is read for the device, so a missing ~/.ssh/known_hosts does not fail
-// the dial.  A jump host is checked against the known hosts of the ssh config
-// or ~/.ssh/known_hosts, see WithProxyJump, and fn never sees its key.
+// WithHostKey or WithInsecureIgnoreHostKey, in any order, the dial fails
+// before it connects, as it does for a nil fn.  No known_hosts file is read
+// for the device, so a missing ~/.ssh/known_hosts does not fail the dial.  A
+// jump host is checked against the known hosts, those of WithKnownHosts or
+// else of the ssh config or ~/.ssh/known_hosts, see WithProxyJump, and fn
+// never sees its key.
 func WithHostKeyCallback(fn ssh.HostKeyCallback) DialOption {
 	return dialOptionFunc(func(cfg *dialConfig) {
 		cfg.hostKeyCallback = fn
@@ -617,9 +627,6 @@ func (cfg *dialConfig) hostKeyCheck(clientConfig *ssh.ClientConfig, addr string)
 		var others []string
 		if cfg.pinned {
 			others = append(others, "WithHostKey")
-		}
-		if cfg.knownHostsGiven {
-			others = append(others, "WithKnownHosts")
 		}
 		if cfg.insecure {
 			others = append(others, "WithInsecureIgnoreHostKey")

@@ -113,14 +113,25 @@ tr, err := ncssh.DialHost(ctx, "switch1.example.net",
 The callback is the only check of the device. No `known_hosts` file is
 read for it, and an error it returns fails the dial before the login,
 wrapped so that `errors.As` finds it. It runs again at every later key
-exchange of the session, a rekey after about a gigabyte of traffic, and an
-error there ends the session: so it must not depend on the context of the
-dial, which may be over by then. Given with `WithHostKey`,
-`WithKnownHosts` or `WithInsecureIgnoreHostKey`, or given nil, it fails
-the dial before it connects. The device presents the key type it prefers
-among those the client asks for; set `HostKeyAlgorithms` with
-`WithClientConfig` to narrow them. A jump host is checked against the
-known hosts as ever, and the callback never sees its key.
+exchange of the session: a rekey that `x/crypto/ssh` starts after 64 GiB
+of traffic with an AES cipher and 1 GiB with any other, or one that the
+device asks for at any time. An error there ends the session, with an
+error in `Session.Err` that wraps it. So the callback must not depend on
+the context of the dial, which may be over by then. Given with
+`WithHostKey` or `WithInsecureIgnoreHostKey`, or given nil, it fails the
+dial before it connects. `WithKnownHosts` next to it is for the jump
+hosts only. A jump host is checked against the known hosts as ever, and
+the callback never sees its key.
+
+The callback gets the host and port the dial connects to: the SSH
+config's `HostName`, or else the host given. The `net.Addr` it gets is no
+help: through a jump host it is `0.0.0.0:0`, and with `WithDialer` it is
+whatever that connection reports. The key it is shown is of the first
+type on the client's list that the device has a key of. That list is the
+default of `x/crypto/ssh`, certificates first and Ed25519 after ECDSA and
+RSA, and it can change with the version of `x/crypto/ssh`. A program that
+records keys should set `HostKeyAlgorithms` with `WithClientConfig` to
+the types it records.
 
 ## Authentication
 
@@ -240,7 +251,8 @@ even with `WithInsecureIgnoreHostKey`, `WithHostKey` or
 add its key. Log in to it once with `ssh` from
 the account that runs the program, or pass a file with its key to
 `WithKnownHosts`. That replaces the default for the device too, so list
-the device's file as well.
+the device's file as well, unless `WithHostKey` or `WithHostKeyCallback`
+checks the device.
 
 Closing the session closes the jump host connections. A keepalive probes
 the device through them, so it notices a dead jump host too.
