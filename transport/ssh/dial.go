@@ -213,7 +213,9 @@ func WithSSHConfig(path string) DialOption {
 // says otherwise.  Its login never uses the password.  The device leg keeps the
 // password from it only while the device's host key is checked: with
 // WithInsecureIgnoreHostKey or a permissive callback from WithClientConfig, it
-// can end that leg itself and read the password.  Its host key always has to be
+// can end that leg itself and read the password.  So it can at the first dial
+// of a device whose key a callback of WithHostKeyCallback learns then: the key
+// it learns may be the jump host's own.  Its host key always has to be
 // among the known hosts, see WithKnownHosts: a jump host that is new is refused,
 // also where the ssh config has ssh accept it (StrictHostKeyChecking no or
 // accept-new).

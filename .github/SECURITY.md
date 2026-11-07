@@ -32,11 +32,14 @@ release. Earlier releases are not patched.
 ## What the library protects against
 
 - **Talking to the wrong device.** `ncssh.DialHost` checks the device's
-  host key against the known hosts or the keys from `ncssh.WithHostKey`,
-  and never adds a key by itself. `nctls.Dial` verifies the server
-  certificate against the host it dialed. Only the caller turns these
-  checks off, with `ncssh.WithInsecureIgnoreHostKey`, a `HostKeyCallback`
-  set through `ncssh.WithClientConfig`, or `tls.Config.InsecureSkipVerify`.
+  host key against the known hosts, the keys from `ncssh.WithHostKey` or
+  the callback of `ncssh.WithHostKeyCallback`, and never adds a key by
+  itself. `nctls.Dial` verifies the server certificate against the host it
+  dialed. Only the caller turns these checks off, with
+  `ncssh.WithInsecureIgnoreHostKey`, a `HostKeyCallback` set through
+  `ncssh.WithClientConfig`, or `tls.Config.InsecureSkipVerify`. A callback
+  of `ncssh.WithHostKeyCallback` that learns a key on first contact accepts
+  whatever key that first contact shows.
   `ncssh.Dial` and `ncssh.NewTransport` check what the caller's
   `ssh.ClientConfig` checks, and the system `ssh` behind `nccmd` follows
   its own configuration. See [Host keys](../docs/connecting.md#host-keys).
@@ -48,7 +51,9 @@ release. Earlier releases are not patched.
   while the device's host key is checked: with
   `ncssh.WithInsecureIgnoreHostKey`, or a permissive `HostKeyCallback` through
   `ncssh.WithClientConfig`, a jump host can end that leg itself and read the
-  password. The host key of the jump host has to be among the known hosts,
+  password. So it can at the first dial of a device whose key a callback of
+  `ncssh.WithHostKeyCallback` learns then: the key it learns may be the jump
+  host's own. The host key of the jump host has to be among the known hosts,
   whatever the options and the SSH config say. See
   [Jump hosts](../docs/connecting.md#jump-hosts).
 - **Unbounded device input.** By default a buffered message is limited to

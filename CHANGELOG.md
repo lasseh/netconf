@@ -25,6 +25,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that the device has. They said that the device chooses the type, and that
   a rekey comes after about a gigabyte of traffic. With AES it comes after
   64 GiB, and the device can ask for one at any time.
+- `.github/SECURITY.md` and `WithProxyJump` say that a `WithHostKeyCallback`
+  that learns a key on first contact lets a jump host read the device's
+  password at that first dial, as `WithInsecureIgnoreHostKey` does at every
+  dial.
 
 ## v0.1.1 - 2026-11-07
 
