@@ -217,6 +217,7 @@ patch, see
 | `Review` | Your function, given a non-empty diff before the commit. An error from it ends the change |
 | `Confirm` | Commit as a confirmed commit, and confirm after `Verify`. Rounded up to whole minutes, at most 65535 minutes |
 | `Verify` | Your function, run while the confirmed commit is in effect. An error or the end of its context leaves the commit unconfirmed |
+| `Revert` | When `Verify` fails, take the change back at once: commit the configuration from before it under the same lock, instead of waiting for Junos to go back. `ChangeResult.Reverted` says that it did. Needs `Verify` |
 | `Comment` | Recorded with the commit. Junos 26.2 refuses a comment over 512 bytes in UTF-8 |
 | `Synchronize` | Commit on both routing engines. [Not verified](junos-verified.md#not-verified-on-a-device) on a device with two routing engines |
 | `Full` | Have every process read the whole configuration again, like `commit full` |

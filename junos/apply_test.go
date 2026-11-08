@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -83,6 +84,9 @@ const (
 	stepCommit    = "commit"
 	stepConfirmed = "commit confirmed"
 	stepConfirm   = "confirm"
+	// A change taken back: the configuration from before it, and its commit.
+	stepBack       = "rollback 1"
+	stepBackCommit = "commit back"
 )
 
 // answer is what the scripted device does with one step.
@@ -103,6 +107,7 @@ type changeDevice struct {
 	steps     []string
 	ops       []string
 	confirmed bool
+	back      bool
 }
 
 func newChangeDevice(t *testing.T, script map[string]answer, opts ...netconf.SessionOption) *changeDevice {
@@ -157,6 +162,9 @@ func (d *changeDevice) receive(op string) answer {
 		step = stepClose
 	case strings.HasPrefix(op, `<load-configuration rollback="0"`):
 		step, a.body = stepRollback, loadOK
+	case strings.HasPrefix(op, `<load-configuration rollback="1"`):
+		step, a.body = stepBack, loadOK
+		d.back = true
 	case strings.HasPrefix(op, "<load-configuration"):
 		step, a.body = stepLoad, loadOK
 	case strings.HasPrefix(op, `<get-configuration compare="rollback" rollback="0"`):
@@ -168,6 +176,8 @@ func (d *changeDevice) receive(op string) answer {
 	case strings.HasPrefix(op, "<commit-configuration") && strings.Contains(op, "<confirmed>"):
 		step, a.body = stepConfirmed, commitDone
 		d.confirmed = true
+	case strings.HasPrefix(op, "<commit-configuration") && d.back:
+		step, a.body = stepBackCommit, commitDone
 	case strings.HasPrefix(op, "<commit-configuration") && d.confirmed:
 		step, a.body = stepConfirm, commitDone
 	case strings.HasPrefix(op, "<commit-configuration"):
@@ -341,6 +351,7 @@ func TestChangeApply_WaysOut(t *testing.T) {
 		// says is in the error's text, saysNot is not
 		says, saysNot string
 		committed     bool
+		reverted      bool
 		diff          string
 		warnings      int
 	}
@@ -349,6 +360,19 @@ func TestChangeApply_WaysOut(t *testing.T) {
 	const refused = `<rpc-error><error-type>protocol</error-type><error-tag>operation-failed</error-tag><error-severity>error</error-severity><error-message>no</error-message></rpc-error>`
 	private := func(c *junos.Change, _ context.CancelFunc) { c.Private = true }
 	confirmed := func(c *junos.Change, _ context.CancelFunc) { c.Confirm = 5 * time.Minute }
+	// reverting is a change whose Verify says no, to be taken back at once
+	reverting := func(c *junos.Change, _ context.CancelFunc) {
+		c.Confirm = 5 * time.Minute
+		c.Verify = func(context.Context) error { return errVerify }
+		c.Revert = true
+	}
+	// pending is the commit history while the change waits for its
+	// confirmation, with what else the test has in store
+	pending := func(more map[string]answer) map[string]answer {
+		script := map[string]answer{stepHistory: {body: commitsPending}}
+		maps.Copy(script, more)
+		return script
+	}
 
 	tests := []test{
 		{
@@ -847,6 +871,99 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			diff:      wantDiff,
 		},
 		{
+			// The change still waits, so rollback 1 is the configuration
+			// from before it, and committing that takes the change back.
+			name:   "verify says no, taken back",
+			change: reverting,
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(nil)
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepBack, stepBackCommit, stepUnlock},
+			says:      "junos: verify: ",
+			is:        []error{errVerify},
+			isNot:     []error{junos.ErrNotConfirmed, junos.ErrCommitUnknown},
+			reverted:  true,
+			diff:      wantDiff,
+		},
+		{
+			// Once Junos went back by itself, rollback 1 is the change: it is
+			// not loaded, and the device alone knows what is in effect.
+			name:      "verify says no, and the change no longer waits",
+			change:    reverting,
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrCommitUnknown, errVerify},
+			isNot:     []error{junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
+			name:   "verify says no, and the commit history cannot be read",
+			change: reverting,
+			script: func(context.CancelFunc) map[string]answer {
+				return map[string]answer{stepHistory: {body: refused}}
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrNotConfirmed, errVerify},
+			isNot:     []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
+			// Junos still goes back by itself.  The candidate is put back.
+			name:   "verify says no, and Junos refuses the configuration from before",
+			change: reverting,
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(map[string]answer{stepBack: {body: refused}})
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepBack, stepRollback, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrNotConfirmed, errVerify, netconf.ErrOperationFailed},
+			isNot:     []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
+			name:   "verify says no, and Junos refuses to commit the configuration from before",
+			change: reverting,
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(map[string]answer{stepBackCommit: {body: refused}})
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepBack, stepBackCommit, stepRollback, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrNotConfirmed, errVerify, netconf.ErrOperationFailed},
+			isNot:     []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
+			name:   "verify says no, and the commit of the configuration from before is never answered",
+			change: reverting,
+			script: func(cancel context.CancelFunc) map[string]answer {
+				return pending(map[string]answer{stepBackCommit: {silent: true, then: cancel}})
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepBack, stepBackCommit, stepRollback, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrCommitUnknown, errVerify, context.Canceled},
+			isNot:     []error{junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
+			// Revert is about what Verify finds: a refused confirmation is
+			// left to Junos as before.
+			name: "Junos refuses the confirmation of a change to take back",
+			change: func(c *junos.Change, _ context.CancelFunc) {
+				c.Confirm = 5 * time.Minute
+				c.Verify = func(context.Context) error { return nil }
+				c.Revert = true
+			},
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(map[string]answer{stepConfirm: {body: refused}})
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepConfirm, stepUnlock},
+			says:      "junos: confirm commit: ",
+			is:        []error{junos.ErrNotConfirmed, netconf.ErrOperationFailed},
+			isNot:     []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
 			// A confirmation after the time is up would find the change
 			// rolled back and report it committed.
 			name: "verify takes longer than there is time to confirm",
@@ -988,8 +1105,70 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			}
 
 			be.Equal(t, tc.committed, result.Committed)
+			be.Equal(t, tc.reverted, result.Reverted)
 			be.Equal(t, tc.diff, result.Diff)
 			be.Equal(t, tc.warnings, len(result.Warnings))
+		})
+	}
+}
+
+// What goes out to take a change back: the configuration from before it,
+// committed to the routing engines the change went to, with a comment that
+// says what it takes back and stays within what Junos takes.
+func TestChangeApply_Revert(t *testing.T) {
+	const (
+		history = `<get-commit-information></get-commit-information>`
+		back    = `<load-configuration rollback="1"></load-configuration>`
+	)
+	errVerify := errors.New("bgp did not come back")
+	long := strings.Repeat("é", 300)
+
+	tests := []struct {
+		name   string
+		change func(c *junos.Change)
+		want   []string
+	}{
+		{
+			name:   "with a comment",
+			change: func(c *junos.Change) { c.Comment = "add ntp server" },
+			want:   []string{history, back, `<commit-configuration><log>taken back: add ntp server</log></commit-configuration>`},
+		},
+		{
+			name: "without a comment",
+			want: []string{history, back, `<commit-configuration><log>taken back</log></commit-configuration>`},
+		},
+		{
+			name:   "on both routing engines",
+			change: func(c *junos.Change) { c.Synchronize = true },
+			want:   []string{history, back, `<commit-configuration><synchronize></synchronize><log>taken back</log></commit-configuration>`},
+		},
+		{
+			// cut to 512 bytes, between characters
+			name:   "with a comment as long as Junos takes",
+			change: func(c *junos.Change) { c.Comment = long[:510] },
+			want: []string{history, back,
+				`<commit-configuration><log>taken back: ` + long[:500] + `</log></commit-configuration>`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dev := newChangeDevice(t, map[string]answer{stepHistory: {body: commitsPending}})
+			change := ntp()
+			change.Confirm = 5 * time.Minute
+			change.Verify = func(context.Context) error { return errVerify }
+			change.Revert = true
+			if tc.change != nil {
+				tc.change(&change)
+			}
+
+			result, err := applyWithin(context.Background(), t, change, dev.sess)
+			be.True(t, errors.Is(err, errVerify))
+			be.True(t, result.Reverted)
+			be.False(t, result.Committed)
+
+			// the steps after the confirmed commit, without the unlock
+			_, ops := dev.received()
+			be.AllEqual(t, tc.want, ops[4:len(ops)-1])
 		})
 	}
 }
@@ -1017,6 +1196,11 @@ func TestChangeApply_RefusedUnsent(t *testing.T) {
 			"verify without confirm",
 			junos.Change{Config: "<configuration/>", Verify: func(context.Context) error { return nil }},
 			"Verify needs Confirm",
+		},
+		{
+			"revert without verify",
+			junos.Change{Config: "<configuration/>", Confirm: time.Minute, Revert: true},
+			"Revert needs Verify",
 		},
 		{
 			// Junos refuses the commit for it, when the load has gone through
