@@ -11,7 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the commit history to be sure that the confirmed commit still waits, loads
   the configuration from before it and commits that under the same lock,
   with `Synchronize` as the change has it and a comment that starts with
-  "taken back". `ChangeResult.Reverted` says that it did. Without it, a
+  "taken back". Like the confirmation, it sends nothing once the time to
+  confirm is up. `ChangeResult.Reverted` says that it did. Without it, a
   change whose `Verify` failed stayed in effect until Junos went back by
   itself, minutes later.
 

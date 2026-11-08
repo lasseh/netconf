@@ -127,7 +127,8 @@ waits for the receive loop to end.
 5. Commit, or in a dry run send a commit check and stop.
 6. With `Confirm`, call `Verify` if set, then confirm. With `Revert` and a
    failed `Verify`, read the commit history, and while the change still
-   waits load `junos.Rollback(1)` and commit it.
+   waits load `junos.Rollback(1)` and commit it, all before the time to
+   confirm is up.
 7. Release the candidate, however the change ends.
 
 The release runs on `context.WithoutCancel(ctx)` under `releaseTimeout`.

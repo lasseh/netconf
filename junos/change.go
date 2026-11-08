@@ -100,6 +100,11 @@ type Change struct {
 	// confirms the change and replaces it in one: what is left in effect is
 	// the earlier configuration.  It needs Verify.
 	//
+	// The commit that takes the change back confirms it, so it keeps to the
+	// time to confirm as the confirmation does: nothing is sent once the
+	// time is up, as after a Verify that took all of it.  Junos may be going
+	// back by itself then, and rollback 1 be the change.
+	//
 	// When the change was taken back the result says so, Reverted, and the
 	// error is that of Verify.  When it was not, the error says why next to
 	// that of Verify: with ErrNotConfirmed while Junos still goes back by
@@ -300,7 +305,7 @@ func (c Change) Apply(ctx context.Context, session *netconf.Session) (result Cha
 		note(reply)
 		var failed verifyError
 		if err != nil && c.Revert && errors.As(err, &failed) {
-			reverted, loaded, revErr := c.revert(ctx, session, note)
+			reverted, loaded, revErr := c.revert(ctx, session, sent, note)
 			dirty = loaded
 			switch {
 			case reverted:
@@ -533,8 +538,17 @@ func (v verifyError) Unwrap() error { return v.err }
 // confirmation, see Change.Revert.  It reports whether it did, and whether it
 // sent the load of the earlier configuration, which leaves the candidate to
 // be put back when no commit follows.  Its error says why the change was not
-// taken back.
-func (c Change) revert(ctx context.Context, session *netconf.Session, note func(*netconf.Reply)) (reverted, loaded bool, err error) {
+// taken back.  sent is when the confirmed commit went out.
+func (c Change) revert(ctx context.Context, session *netconf.Session, sent time.Time, note func(*netconf.Reply)) (reverted, loaded bool, err error) {
+	// The deadline of the confirmation, for the same reason, see confirm: a
+	// request that goes out before it reaches Junos before Junos goes back.
+	deadline := sent.Add(c.Confirm)
+	if !time.Now().Before(deadline) {
+		return false, false, errors.New("junos: the time to confirm is up")
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
 	// Rollback 1 is the configuration from before the change only while the
 	// change is the newest commit and waits: once Junos has gone back by
 	// itself, rollback 1 is the change.

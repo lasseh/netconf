@@ -946,6 +946,45 @@ func TestChangeApply_WaysOut(t *testing.T) {
 			diff:      wantDiff,
 		},
 		{
+			// Junos may be going back by itself once the time is up, and
+			// rollback 1 be the change: nothing is sent.
+			name: "verify says no when the time to confirm is up",
+			change: func(c *junos.Change, _ context.CancelFunc) {
+				c.Confirm = 30 * time.Millisecond
+				c.Verify = func(ctx context.Context) error {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				c.Revert = true
+			},
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(nil)
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepUnlock},
+			says:      "not taken back: junos: the time to confirm is up",
+			is:        []error{junos.ErrNotConfirmed, context.DeadlineExceeded},
+			isNot:     []error{junos.ErrCommitUnknown},
+			diff:      wantDiff,
+		},
+		{
+			// The commit that takes the change back is no different from the
+			// confirmation: the time to confirm cuts it off.
+			name: "the time to confirm is up under the commit of the configuration from before",
+			change: func(c *junos.Change, _ context.CancelFunc) {
+				c.Confirm = 300 * time.Millisecond
+				c.Verify = func(context.Context) error { return errVerify }
+				c.Revert = true
+			},
+			script: func(context.CancelFunc) map[string]answer {
+				return pending(map[string]answer{stepBackCommit: {silent: true}})
+			},
+			wantSteps: []string{stepLock, stepLoad, stepCompare, stepConfirmed, stepHistory, stepBack, stepBackCommit, stepRollback, stepUnlock},
+			says:      "not taken back",
+			is:        []error{junos.ErrCommitUnknown, errVerify, context.DeadlineExceeded},
+			isNot:     []error{junos.ErrNotConfirmed},
+			diff:      wantDiff,
+		},
+		{
 			// Revert is about what Verify finds: a refused confirmation is
 			// left to Junos as before.
 			name: "Junos refuses the confirmation of a change to take back",
