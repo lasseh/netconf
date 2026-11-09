@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lasseh/netconf"
 	"github.com/lasseh/netconf/internal/operr"
@@ -90,6 +91,27 @@ type Change struct {
 	// needs Confirm.
 	Verify func(ctx context.Context) error
 
+	// Revert takes the change back at once when Verify fails, instead of
+	// leaving it in effect until Junos goes back by itself when the time to
+	// confirm is up.  It reads the commit history to be sure that the
+	// confirmed commit still waits for its confirmation, loads the
+	// configuration from before it, Rollback(1), and commits that under the
+	// same lock, to the routing engines the change went to.  That commit
+	// confirms the change and replaces it in one: what is left in effect is
+	// the earlier configuration.  It needs Verify.
+	//
+	// The commit that takes the change back confirms it, so it keeps to the
+	// time to confirm as the confirmation does: nothing is sent once the
+	// time is up, as after a Verify that took all of it.  Junos may be going
+	// back by itself then, and rollback 1 be the change.
+	//
+	// When the change was taken back the result says so, Reverted, and the
+	// error is that of Verify.  When it was not, the error says why next to
+	// that of Verify: with ErrNotConfirmed while Junos still goes back by
+	// itself, with ErrCommitUnknown when only the device knows what is in
+	// effect, as when the change no longer waits.
+	Revert bool
+
 	// Review is shown what the change does to the configuration before
 	// anything is committed.  An error from it ends the change there.
 	Review func(ctx context.Context, diff string) error
@@ -120,6 +142,11 @@ type ChangeResult struct {
 	// Committed says that the change is in the active configuration for
 	// good.
 	Committed bool
+
+	// Reverted says that the change was in effect and was taken back at
+	// once, see Change.Revert: Verify failed and the configuration from
+	// before the change was committed again.
+	Reverted bool
 
 	// Warnings is what Junos had to say about the load, the check and the
 	// commits without refusing them.
@@ -276,6 +303,21 @@ func (c Change) Apply(ctx context.Context, session *netconf.Session) (result Cha
 	if c.Confirm > 0 {
 		reply, err := c.confirm(ctx, session, sent)
 		note(reply)
+		var failed verifyError
+		if err != nil && c.Revert && errors.As(err, &failed) {
+			reverted, loaded, revErr := c.revert(ctx, session, sent, note)
+			dirty = loaded
+			switch {
+			case reverted:
+				result.Reverted = true
+				return result, fmt.Errorf("junos: verify: %w", failed.err)
+			case errors.Is(revErr, ErrCommitUnknown):
+				// ErrNotConfirmed would promise that Junos goes back
+				return result, fmt.Errorf("junos: verify: %w; not taken back: %w", failed.err, revErr)
+			default:
+				return result, fmt.Errorf("%w; not taken back: %w", err, revErr)
+			}
+		}
 		if err != nil {
 			return result, err
 		}
@@ -312,6 +354,8 @@ func (c Change) validate(load LoadConfiguration, commit CommitConfiguration) err
 		return errors.New("junos: a private copy cannot be committed with Confirm")
 	case c.Verify != nil && c.Confirm <= 0:
 		return errors.New("junos: Verify needs Confirm, there is no going back from a commit without it")
+	case c.Revert && c.Verify == nil:
+		return errors.New("junos: Revert needs Verify, nothing else says that the change has to go")
 	case c.LockWait < 0:
 		return errors.New("junos: LockWait cannot be negative")
 	}
@@ -462,7 +506,7 @@ func (c Change) confirm(ctx context.Context, session *netconf.Session, sent time
 
 	if c.Verify != nil {
 		if err := c.Verify(ctx); err != nil {
-			return nil, fmt.Errorf("junos: verify: %w: %w", ErrNotConfirmed, err)
+			return nil, fmt.Errorf("junos: verify: %w: %w", ErrNotConfirmed, verifyError{err})
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -480,6 +524,67 @@ func (c Change) confirm(ctx context.Context, session *netconf.Session, sent time
 	default:
 		return reply, step("confirm commit", inDoubt(reply, err))
 	}
+}
+
+// verifyError is the error of Verify, inside the error of confirm, for
+// Apply to tell it from the other reasons a confirmation is not sent.  Its
+// text is that of Verify's error.
+type verifyError struct{ err error }
+
+func (v verifyError) Error() string { return v.err.Error() }
+func (v verifyError) Unwrap() error { return v.err }
+
+// revert takes back a change that is in effect and waits for its
+// confirmation, see Change.Revert.  It reports whether it did, and whether it
+// sent the load of the earlier configuration, which leaves the candidate to
+// be put back when no commit follows.  Its error says why the change was not
+// taken back.  sent is when the confirmed commit went out.
+func (c Change) revert(ctx context.Context, session *netconf.Session, sent time.Time, note func(*netconf.Reply)) (reverted, loaded bool, err error) {
+	// The deadline of the confirmation, for the same reason, see confirm: a
+	// request that goes out before it reaches Junos before Junos goes back.
+	deadline := sent.Add(c.Confirm)
+	if !time.Now().Before(deadline) {
+		return false, false, errors.New("junos: the time to confirm is up")
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	// Rollback 1 is the configuration from before the change only while the
+	// change is the newest commit and waits: once Junos has gone back by
+	// itself, rollback 1 is the change.
+	commits, err := GetCommitInformation{}.Exec(ctx, session)
+	if err != nil {
+		return false, false, step("commit history", err)
+	}
+	if len(commits) == 0 || !commits[0].Pending {
+		return false, false, fmt.Errorf("junos: commit history: %w: the newest commit does not wait for its confirmation", ErrCommitUnknown)
+	}
+
+	reply, err := Rollback(1).Exec(ctx, session)
+	note(reply)
+	if err != nil {
+		return false, true, step("load the configuration from before the change", err)
+	}
+	reply, err = CommitConfiguration{Comment: revertComment(c.Comment), Synchronize: c.Synchronize}.Exec(ctx, session)
+	note(reply)
+	if err != nil {
+		return false, true, step("commit the configuration from before the change", inDoubt(reply, err))
+	}
+	return true, false, nil
+}
+
+// revertComment is the comment of the commit that takes a change back: what
+// it takes back, cut between characters to what Junos takes.
+func revertComment(comment string) string {
+	s := "taken back"
+	if comment != "" {
+		s += ": " + comment
+	}
+	for len(s) > maxComment {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return s
 }
 
 // step names what the change was doing in front of err.  It is the name of

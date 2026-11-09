@@ -261,6 +261,10 @@ With `NETCONF_DUT_CHANGE_COMMIT` and the `junos` flavor:
   and `Apply` confirms.
 - `TestJunosChangeNotConfirmed` makes a confirmed commit that `Verify`
   turns down, and waits up to three minutes for Junos to take it back.
+- `TestJunosChangeReverted` makes a confirmed commit that `Verify` sees in
+  effect and turns down, with `Revert`. The change has to be gone when
+  `Apply` returns, nothing may wait for a confirmation, and the newest
+  commit has to carry the comment that says what it took back.
 - `TestJunosCommitUnknown` ends the context 150 ms after it sends a commit,
   once plain and once confirmed. `Apply` has to return
   `junos.ErrCommitUnknown`, and a second session finds the commit with

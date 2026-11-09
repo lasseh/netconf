@@ -1718,6 +1718,49 @@ func TestJunosChangeNotConfirmed(t *testing.T) {
 	be.Equal(t, "", diff)
 }
 
+// A confirmed commit that Verify sees in effect and turns down, taken back
+// at once with Revert: the change is gone when Apply returns, and the commit
+// that took it back confirmed it, so nothing waits.
+func TestJunosChangeReverted(t *testing.T) {
+	session := commitSession(t)
+	ctx := changeCtx(t)
+
+	value, config := probe()
+	comment := "netconf integration test, " + value
+	turnedDown := errors.New("turned down by the test")
+	inEffect := false
+	result, err := junos.Change{
+		Format:  junos.FormatSet,
+		Config:  config,
+		Comment: comment,
+		Confirm: 2 * time.Minute,
+		Verify: func(ctx context.Context) error {
+			inEffect = strings.Contains(activeProbe(ctx, t, session), value)
+			return turnedDown
+		},
+		Revert: true,
+	}.Apply(ctx, session)
+	be.True(t, errors.Is(err, turnedDown))
+	be.False(t, errors.Is(err, junos.ErrNotConfirmed))
+	be.True(t, inEffect)
+	be.True(t, result.Reverted)
+	be.False(t, result.Committed)
+	be.False(t, strings.Contains(activeProbe(ctx, t, session), value))
+
+	history := commits(ctx, t, session)
+	be.Equal(t, "taken back: "+comment, history[0].Comment)
+	be.Equal(t, "netconf", history[0].Client)
+	be.Equal(t, comment, history[1].Comment)
+	for _, entry := range history {
+		be.False(t, entry.Pending)
+	}
+
+	// nothing is left in the candidate for whoever commits next
+	diff, err := junos.CompareRollback{}.Exec(ctx, session)
+	be.NilErr(t, err)
+	be.Equal(t, "", diff)
+}
+
 // A change in a private copy of the candidate.
 func TestJunosChangePrivate(t *testing.T) {
 	session := commitSession(t)
