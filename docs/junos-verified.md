@@ -329,6 +329,8 @@ On vJunos-router, vJunos-switch and vJunosEvolved 26.2, the runs covered:
 - `junos.Change` committing under the lock and in a private copy
 - a confirmed commit that is confirmed, and one that the device takes
   back
+- a confirmed commit that `Verify` turns down and `Change.Revert` takes
+  back at once
 - changes refused because another session holds the lock or has
   uncommitted changes in the candidate
 - non-ASCII text, loaded and read back in every format
