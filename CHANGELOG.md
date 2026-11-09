@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## v0.1.3 - 2026-11-09
+
 ### Added
 
 - `Change.Revert` takes a change back at once when `Verify` fails. It reads
